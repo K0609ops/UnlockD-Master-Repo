@@ -9,9 +9,6 @@ export const Settings: React.FC = () => {
   const activeData = getActiveUserData(db);
 
   const [income, setIncome] = useState(activeData?.user.monthly_income || 0);
-  const [apiKey, setApiKey] = useState(db.geminiApiKey || '');
-
-  // Account creation state
   const [newAccType, setNewAccType] = useState('savings');
   const [newAccBalance, setNewAccBalance] = useState('');
 
@@ -20,24 +17,36 @@ export const Settings: React.FC = () => {
   const handleSave = () => {
     updateDB(prev => ({
       ...prev,
-      geminiApiKey: apiKey,
-      users: prev.users.map(u => u.id === activeData.user.id ? { ...u, monthly_income: income } : u)
+      users: prev.users.map(u => u.id === activeData.user.id ? { ...u, monthly_income: income } : u),
     }));
-    alert('Settings saved. Forecasts invalidated.');
+    alert('Settings saved. Forecasts recalculated.');
   };
 
   const handleAddAccount = () => {
     if (!newAccBalance) return;
     const balanceNum = Number(newAccBalance);
+    
+    // Check if account type already exists
+    const existingAccount = activeData.accounts.find(a => a.accountType === newAccType);
+    
+    if (existingAccount) {
+      updateDB(prev => ({
+        ...prev,
+        accounts: prev.accounts.map(a => a.id === existingAccount.id ? { ...a, balance: balanceNum } : a)
+      }));
+      setNewAccBalance('');
+      alert('Account balance updated successfully!');
+      return;
+    }
+
     const newAccount = {
       id: crypto.randomUUID(),
       userId: activeData.user.id,
-      accountType: newAccType as any,
+      accountType: newAccType as 'primary' | 'savings' | 'investment',
       balance: balanceNum,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
-    
-    // Synthetic initial deposit so ledger balances
+
     const depositTx = {
       id: 'tx_' + crypto.randomUUID(),
       user_id: activeData.user.id,
@@ -53,32 +62,35 @@ export const Settings: React.FC = () => {
       created_at: new Date().toISOString(),
       toAccountId: newAccount.id,
       status: 'completed' as const,
-      idempotencyKey: crypto.randomUUID()
+      idempotencyKey: crypto.randomUUID(),
     };
 
     updateDB(prev => ({
       ...prev,
       accounts: [...prev.accounts, newAccount],
-      transactions: [depositTx, ...prev.transactions]
+      transactions: [depositTx, ...prev.transactions],
     }));
     setNewAccBalance('');
     alert('Account created successfully!');
   };
 
   const handleClear = () => {
-    if (confirm('Are you sure you want to delete all data? This is unrecoverable.')) {
+    if (confirm('Are you sure you want to delete all local data? This is unrecoverable.')) {
       clearDB();
       navigate('/');
     }
   };
 
   const handleExport = () => {
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + activeData.transactions.map(t => `${t.transaction_date},${t.merchant},${t.category},${t.amount},${t.type}`).join("\n");
+    const csvContent = 'data:text/csv;charset=utf-8,'
+      + 'Date,Merchant,Category,Amount,Type\n'
+      + activeData.transactions
+          .map(t => `${t.transaction_date},${t.merchant},${t.category},${t.amount},${t.type}`)
+          .join('\n');
     const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "finverse_export.csv");
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', 'finverse_export.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -92,17 +104,16 @@ export const Settings: React.FC = () => {
       </div>
 
       <div className="flex flex-col gap-10">
-        
+
         <section className="bg-surface border border-line rounded-3xl p-8 shadow-sm">
           <h2 className="text-xl font-serif mb-6">Engine Parameters</h2>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <label className="text-caption font-semibold uppercase tracking-wider text-muted">Monthly Income (Net)</label>
-              <input type="number" value={income} onChange={e => setIncome(Number(e.target.value))} className="bg-paper border border-line rounded-xl px-4 py-3 font-mono focus:outline-none focus:border-ink" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="text-caption font-semibold uppercase tracking-wider text-muted">Gemini API Key</label>
-              <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="bg-paper border border-line rounded-xl px-4 py-3 font-mono focus:outline-none focus:border-ink" />
+              <input
+                type="number" value={income} onChange={e => setIncome(Number(e.target.value))}
+                className="bg-paper border border-line rounded-xl px-4 py-3 font-mono focus:outline-none focus:border-ink"
+              />
             </div>
             <button onClick={handleSave} className="mt-2 bg-ink text-paper py-3 rounded-xl font-medium">Save Parameters</button>
           </div>
@@ -112,8 +123,8 @@ export const Settings: React.FC = () => {
           <h2 className="text-xl font-serif mb-6">Account Management</h2>
           <p className="text-muted text-sm mb-6">Add new financial accounts to track in your Finverse environment.</p>
           <div className="flex items-center gap-4 bg-paper p-4 rounded-xl border border-line">
-            <select 
-              value={newAccType} 
+            <select
+              value={newAccType}
               onChange={e => setNewAccType(e.target.value)}
               className="bg-transparent font-medium focus:outline-none cursor-pointer flex-1"
             >
@@ -123,18 +134,18 @@ export const Settings: React.FC = () => {
             </select>
             <div className="flex items-center gap-2 flex-1">
               <span className="text-muted">₹</span>
-              <input 
+              <input
                 type="number" value={newAccBalance}
                 onChange={e => setNewAccBalance(e.target.value)}
                 className="bg-transparent font-mono w-full focus:outline-none"
-                placeholder="Initial Balance"
+                placeholder={activeData.accounts.some(a => a.accountType === newAccType) ? "New Balance" : "Initial Balance"}
               />
             </div>
-            <button 
+            <button
               onClick={handleAddAccount}
               className="bg-ink text-paper px-6 py-2 rounded-lg font-medium text-sm hover:shadow-md transition-shadow"
             >
-              Create Account
+              {activeData.accounts.some(a => a.accountType === newAccType) ? 'Update Balance' : 'Create Account'}
             </button>
           </div>
         </section>

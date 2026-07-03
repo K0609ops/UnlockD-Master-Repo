@@ -7,14 +7,30 @@ interface DashboardChartProps {
   forecast: ForecastPoint[];
   transactions: Transaction[];
   safeSpend: number;
+  timeRange?: 'all' | 'may' | 'june' | 'july';
 }
 
-export const DashboardChart: React.FC<DashboardChartProps> = ({ forecast, transactions, safeSpend }) => {
-  // We'll map out a 30-day timeline (15 days past, 15 days future) for the chart
+export const DashboardChart: React.FC<DashboardChartProps> = ({ forecast, transactions, safeSpend, timeRange = 'all' }) => {
+  // Map out timeline based on selected timeRange
   const data = [];
-  const today = new Date();
+  // Hardcoded to July 3, 2024 for demo purposes to match the seed data
+  const today = new Date('2024-07-03T12:00:00Z');
   
-  for (let i = -15; i <= 15; i++) {
+  let startOffset = -60;
+  let endOffset = 15;
+
+  if (timeRange === 'july') {
+    startOffset = -2; // July 1 is 2 days before July 3
+    endOffset = 28;   // End of July
+  } else if (timeRange === 'june') {
+    startOffset = -32; // June 1
+    endOffset = -3;    // June 30
+  } else if (timeRange === 'may') {
+    startOffset = -63; // May 1
+    endOffset = -33;   // May 31
+  }
+
+  for (let i = startOffset; i <= endOffset; i++) {
     const d = new Date(today);
     d.setDate(today.getDate() + i);
     const dateStr = d.toISOString().split('T')[0];

@@ -7,16 +7,14 @@ export const DataSetup: React.FC = () => {
   const navigate = useNavigate();
   const { db, updateDB } = useFinanceDB();
   const activeData = getActiveUserData(db);
-  
-  const [income, setIncome] = useState(activeData?.user.monthly_income || 0);
+
+  const [income, setIncome] = useState<number | ''>(activeData?.user.monthly_income || '');
   const [hours, setHours] = useState(activeData?.user.hours_per_week || 40);
-  const [apiKey, setApiKey] = useState(db.geminiApiKey || '');
-  
-  // Local state for account creation
+
   const hasAccounts = activeData && activeData.accounts && activeData.accounts.length > 0;
   const [setupAccounts, setSetupAccounts] = useState([
     { id: crypto.randomUUID(), type: 'primary', balance: 5000 },
-    { id: crypto.randomUUID(), type: 'savings', balance: 15000 }
+    { id: crypto.randomUUID(), type: 'savings', balance: 15000 },
   ]);
 
   useEffect(() => {
@@ -29,21 +27,19 @@ export const DataSetup: React.FC = () => {
 
   const handleComplete = () => {
     updateDB(prev => {
-      // Create new accounts if they don't exist
       let newAccounts = prev.accounts;
       let newTxs = prev.transactions;
-      
+
       if (!hasAccounts) {
         const mappedAccounts = setupAccounts.map(acc => ({
           id: acc.id,
           userId: activeData.user.id,
           accountType: acc.type as 'primary' | 'savings' | 'investment',
           balance: Number(acc.balance),
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
         }));
         newAccounts = [...prev.accounts, ...mappedAccounts];
-        
-        // Push synthetic initial deposits to balance the ledger
+
         const depositTxs = mappedAccounts.map(acc => ({
           id: 'tx_' + crypto.randomUUID(),
           user_id: activeData.user.id,
@@ -59,21 +55,20 @@ export const DataSetup: React.FC = () => {
           created_at: new Date().toISOString(),
           toAccountId: acc.id,
           status: 'completed' as const,
-          idempotencyKey: crypto.randomUUID()
+          idempotencyKey: crypto.randomUUID(),
         }));
         newTxs = [...depositTxs, ...prev.transactions];
       }
 
       return {
         ...prev,
-        geminiApiKey: apiKey,
         accounts: newAccounts,
         transactions: newTxs,
-        users: prev.users.map(u => 
-          u.id === activeData.user.id 
-            ? { ...u, monthly_income: Number(income), hours_per_week: Number(hours) } 
+        users: prev.users.map(u =>
+          u.id === activeData.user.id
+            ? { ...u, monthly_income: Number(income), hours_per_week: Number(hours) }
             : u
-        )
+        ),
       };
     });
 
@@ -88,21 +83,21 @@ export const DataSetup: React.FC = () => {
       </div>
 
       <div className="flex flex-col gap-10">
-        
+
         {/* Section 1: Income & Accounts */}
         <section className="bg-surface border border-line rounded-3xl p-8 shadow-sm">
           <h2 className="text-xl font-serif mb-6">1. Baseline Metrics & Accounts</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             <div className="flex flex-col gap-2">
               <label className="text-caption font-semibold uppercase tracking-wider text-muted">Monthly Income (Net)</label>
-              <input 
+              <input
                 type="number" value={income} onChange={e => setIncome(Number(e.target.value))}
                 className="bg-paper border border-line rounded-xl px-4 py-3 font-mono text-lg focus:outline-none focus:border-ink"
               />
             </div>
             <div className="flex flex-col gap-2">
               <label className="text-caption font-semibold uppercase tracking-wider text-muted">Hours Worked / Week</label>
-              <input 
+              <input
                 type="number" value={hours} onChange={e => setHours(Number(e.target.value))}
                 className="bg-paper border border-line rounded-xl px-4 py-3 font-mono text-lg focus:outline-none focus:border-ink"
               />
@@ -116,8 +111,8 @@ export const DataSetup: React.FC = () => {
             <div className="flex flex-col gap-4">
               {setupAccounts.map((acc, index) => (
                 <div key={acc.id} className="grid grid-cols-[1fr_2fr] gap-4 items-center bg-paper p-4 rounded-xl border border-line">
-                  <select 
-                    value={acc.type} 
+                  <select
+                    value={acc.type}
                     onChange={e => setSetupAccounts(prev => prev.map((a, i) => i === index ? { ...a, type: e.target.value } : a))}
                     className="bg-transparent font-medium focus:outline-none cursor-pointer"
                   >
@@ -127,7 +122,7 @@ export const DataSetup: React.FC = () => {
                   </select>
                   <div className="flex items-center gap-2">
                     <span className="text-muted">₹</span>
-                    <input 
+                    <input
                       type="number" value={acc.balance}
                       onChange={e => setSetupAccounts(prev => prev.map((a, i) => i === index ? { ...a, balance: Number(e.target.value) } : a))}
                       className="bg-transparent font-mono w-full focus:outline-none"
@@ -136,7 +131,7 @@ export const DataSetup: React.FC = () => {
                   </div>
                 </div>
               ))}
-              <button 
+              <button
                 onClick={() => setSetupAccounts(prev => [...prev, { id: crypto.randomUUID(), type: 'savings', balance: 0 }])}
                 className="text-xs font-semibold uppercase tracking-wider text-muted hover:text-ink self-start transition-colors"
               >
@@ -146,14 +141,14 @@ export const DataSetup: React.FC = () => {
           )}
         </section>
 
-        {/* Section 2: First Transactions */}
+        {/* Section 2: Seed Transactions */}
         <section className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div>
             <h2 className="text-xl font-serif mb-2">2. Seed Transactions</h2>
             <p className="text-muted text-sm mb-6">Add recent purchases or recurring bills to calibrate the engine.</p>
             <QuickAddTransaction hideTransfer={true} />
           </div>
-          
+
           <div className="bg-surface border border-line rounded-2xl p-6 overflow-y-auto max-h-[400px]">
             <h3 className="text-caption font-semibold uppercase tracking-wider text-muted mb-4">Your Ledger ({activeData.transactions.length})</h3>
             {activeData.transactions.length === 0 ? (
@@ -176,22 +171,7 @@ export const DataSetup: React.FC = () => {
           </div>
         </section>
 
-        {/* Section 3: AI Configuration */}
-        <section className="bg-surface border border-line rounded-3xl p-8 shadow-sm">
-          <div className="flex justify-between items-start mb-6">
-            <div>
-              <h2 className="text-xl font-serif mb-2 text-future">3. Engage Gemini AI (Optional)</h2>
-              <p className="text-muted text-sm max-w-md">Provide a Google Gemini API key to enable the multi-agent negotiation engine. It is stored locally.</p>
-            </div>
-          </div>
-          <input 
-            type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-            placeholder="AIzaSy..."
-            className="w-full bg-paper border border-future-soft rounded-xl px-4 py-3 font-mono focus:outline-none focus:border-future"
-          />
-        </section>
-
-        <button 
+        <button
           onClick={handleComplete}
           className="w-full bg-ink text-paper py-5 rounded-2xl font-medium text-lg hover:-translate-y-1 hover:shadow-2xl transition-all duration-300"
         >

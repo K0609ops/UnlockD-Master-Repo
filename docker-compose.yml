@@ -1,4 +1,7 @@
 services:
+  # ─────────────────────────────────────────────
+  # React Frontend (Vite dev server)
+  # ─────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
@@ -10,49 +13,65 @@ services:
       - /app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
-    # Ensure frontend restarts if it crashes
+      # Firebase (frontend) — values come from root .env
+      - VITE_FIREBASE_API_KEY=${VITE_FIREBASE_API_KEY}
+      - VITE_FIREBASE_AUTH_DOMAIN=${VITE_FIREBASE_AUTH_DOMAIN}
+      - VITE_FIREBASE_PROJECT_ID=${VITE_FIREBASE_PROJECT_ID}
+      - VITE_FIREBASE_STORAGE_BUCKET=${VITE_FIREBASE_STORAGE_BUCKET}
+      - VITE_FIREBASE_MESSAGING_SENDER_ID=${VITE_FIREBASE_MESSAGING_SENDER_ID}
+      - VITE_FIREBASE_APP_ID=${VITE_FIREBASE_APP_ID}
+      # Gemini AI
+      - VITE_GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
+      # Backend URL (internal docker network for browser calls)
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
     restart: unless-stopped
-    # PARTICIPANT TODO: (Optional) If your frontend depends on the backend starting first, uncomment below:
-    # depends_on:
-    #   - backend
 
+  # ─────────────────────────────────────────────
+  # FastAPI Backend
+  # ─────────────────────────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # PARTICIPANT TODO: Update the port mapping below once your backend is ready
     ports:
-      - "3000:3000"
+      - "8000:8000"
     volumes:
       - ./backend:/app
-    # Ensure backend restarts if it crashes
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://finverse:finverse@db:5432/finverse
+      # Firebase Admin SDK — service account credentials
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL}
+      - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY}
+      # Gemini AI (for future backend AI features)
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
-    # PARTICIPANT TODO: (Optional) If you add a database service, uncomment the lines below so the backend configures it
-    # environment:
-    #   - DB_URL=jdbc:postgresql://db:5432/event_platform
-    #   - DB_USER=admin
-    #   - DB_PASS=adminpassword
-    # depends_on:
-    #   - db
 
-  # =======================================================================
-  # PARTICIPANT TODO: (Optional) Database Service Example
-  # =======================================================================
-  # If your project requires a database (SQL, NoSQL, etc.), you can add it here.
-  # Here is an example of adding a PostgreSQL service (you could also use MongoDB, MySQL, etc.):
-  # 
-  # db:
-  #   image: postgres:15-alpine
-  #   container_name: event_db
-  #   environment:
-  #     POSTGRES_USER: admin
-  #     POSTGRES_PASSWORD: adminpassword
-  #     POSTGRES_DB: event_platform
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - db_data:/var/lib/postgresql/data
+  # ─────────────────────────────────────────────
+  # PostgreSQL Database
+  # ─────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: finverse_db
+    environment:
+      POSTGRES_USER: finverse
+      POSTGRES_PASSWORD: finverse
+      POSTGRES_DB: finverse
+    ports:
+      - "5433:5432"    # Host 5433 → container 5432 (avoids conflict with local Postgres)
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finverse -d finverse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
 
-# PARTICIPANT TODO: (Optional) If you added a database with a volume above, declare the volume here:
-# volumes:
-#   db_data:
+volumes:
+  db_data:

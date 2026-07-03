@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
-import { forecast_balance, simulate, calculateSafeToSpend, calculateDailySpendLimit } from '../engine/financeEngine';
+import { forecast_balance, simulate, calculateSafeToSpend, calculateDailySpendLimit, ANCHOR_DATE } from '../engine/financeEngine';
 import { runNegotiation } from '../ai/geminiClient';
 import type { NegotiationResult } from '../ai/geminiClient';
 import { DashboardChart } from '../components/DashboardChart';
@@ -29,6 +29,8 @@ export const Dashboard: React.FC = () => {
 
   // --- Ledger State ---
   const [searchTerm, setSearchTerm] = useState('');
+  const [timeRange, setTimeRange] = useState<'all' | 'may' | 'june' | 'july'>('all');
+  const [ledgerTimeRange, setLedgerTimeRange] = useState<'all' | 'may' | 'june' | 'july'>('all');
 
   if (!activeData) {
     return (
@@ -57,19 +59,24 @@ export const Dashboard: React.FC = () => {
     ? primaryAccounts.reduce((sum, a) => sum + a.balance, 0)
     : transactions.reduce((sum, t) => sum + (t.type === 'income' ? t.amount : (t.type === 'expense' || t.type === 'goal' ? -t.amount : 0)), 0);
 
-  const enginePayload = {
-    monthlyIncome: user.monthly_income,
-    balance: liquidBalance,
-    transactions,
-    recurring,
-    goals
-  };
-
   let safeSpend = 0;
   let forecastData: any[] = [];
   let dailySpendData: { limit: number, status: 'on_track' | 'warning' | 'danger', targetSavingsAmount: number } = { limit: 0, status: 'danger', targetSavingsAmount: 0 };
+  
+  let enginePayload: any = null;
+
   try {
     safeSpend = calculateSafeToSpend({ dbState: db, userId: user.id });
+    
+    enginePayload = {
+      monthlyIncome: user.monthly_income,
+      balance: safeSpend,
+      target_savings_percentage: user.target_savings_percentage,
+      transactions,
+      recurring,
+      goals
+    };
+    
     forecastData = forecast_balance(enginePayload);
     dailySpendData = calculateDailySpendLimit({ dbState: db, userId: user.id });
   } catch (e) {
@@ -95,21 +102,12 @@ export const Dashboard: React.FC = () => {
       const math = simulate(enginePayload, numAmount, false);
       setMathData({ baselineSafe, ...math });
 
-      if (db.geminiApiKey) {
-        const aiRes = await runNegotiation(
-          db.geminiApiKey, negMerchant, numAmount, negCategory,
+      const aiRes = await runNegotiation(
+          negMerchant, numAmount, negCategory,
           baselineSafe, baselineSafe - math.safeSpendChange,
           math.baselineRisk, math.scenarioRisk
         );
         setNegResult(aiRes);
-      } else {
-        setNegResult({
-          present_argument: `I really want this ${negMerchant} purchase, it brings immediate value.`,
-          future_argument: `This drops our safe spend and pushes our risk to ${math.scenarioRisk}.`,
-          resolution: math.scenarioRisk === 'storm' ? 'Skip it entirely.' : 'You are clear to buy.',
-          outcome: math.scenarioRisk === 'storm' ? 'skip' : 'proceed'
-        });
-      }
     } catch (err: any) {
       setNegError(err.message || 'Engine failed.');
     } finally {
@@ -156,38 +154,99 @@ export const Dashboard: React.FC = () => {
   };
   
   const filteredTxs = useMemo(() => {
-    return transactions.filter(t => t.merchant.toLowerCase().includes(searchTerm.toLowerCase()) || t.category.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [transactions, searchTerm]);
+    return transactions.filter(t => {
+      const matchSearch = t.merchant.toLowerCase().includes(searchTerm.toLowerCase()) || t.category.toLowerCase().includes(searchTerm.toLowerCase());
+      if (!matchSearch) return false;
+      if (ledgerTimeRange === 'all') return true;
+      const month = new Date(t.transaction_date).getMonth();
+      if (ledgerTimeRange === 'may') return month === 4;
+      if (ledgerTimeRange === 'june') return month === 5;
+      if (ledgerTimeRange === 'july') return month === 6;
+      return true;
+    });
+  }, [transactions, searchTerm, ledgerTimeRange]);
 
   const [expandedTxId, setExpandedTxId] = useState<string | null>(null);
 
   const handleSavingsSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = Number(e.target.value);
+    // Optimistic UI update
     updateDB(prev => ({
       ...prev,
       users: prev.users.map(u => u.id === user.id ? { ...u, target_savings_percentage: val } : u)
     }));
+    
+    // Persist to Postgres
+    import('../api/client').then(({ apiClient }) => {
+      apiClient.patch(`/finance/${encodeURIComponent(user.email)}`, {
+        target_savings_percentage: val
+      }).catch(err => console.error('Failed to persist target savings:', err));
+    });
   };
 
   return (
     <div className="min-h-screen p-6 py-8 max-w-[1400px] mx-auto animate-fade-in-up flex flex-col gap-8">
       
-      {/* Header */}
-      <header className="flex justify-between items-center bg-surface border border-line rounded-3xl p-6 px-8 shadow-sm">
+      {/* ─── Header ─── */}
+      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-xl font-serif tracking-tight">FINVERSE Command Center</h1>
-          <p className="text-caption text-muted uppercase tracking-widest mt-1">Unified Financial State</p>
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted mb-1">
+            {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
+          </p>
+          <h1 className="text-section font-serif tracking-tight">
+            Hello, {user.username.split(' ')[0]}.
+          </h1>
         </div>
-        <div className="flex items-center gap-6">
-          <Link to="/insights" className="text-sm font-medium text-muted hover:text-ink transition-colors">Insights Engine</Link>
-          <Link to="/goals" className="text-sm font-medium text-muted hover:text-ink transition-colors">Goals & Contracts</Link>
-          <div className="w-[1px] h-6 bg-line"></div>
-          <Link to="/settings" className="flex items-center gap-2 px-4 py-2 bg-paper border border-line rounded-lg text-sm font-medium text-ink hover:bg-line/20 transition-colors">
+        <div className="flex items-center gap-3">
+          <Link to="/insights" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Insights</Link>
+          <Link to="/goals" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Goals</Link>
+          <Link to="/settings" className="flex items-center gap-2 px-4 py-2 bg-ink text-paper rounded-xl text-sm font-medium hover:shadow-lg transition-shadow">
             <SettingsIcon className="w-4 h-4" />
             Settings
           </Link>
         </div>
       </header>
+
+      {/* ─── Personal Details Strip ─── */}
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+        {/* Profile Card */}
+        <div className="col-span-2 sm:col-span-1 lg:col-span-2 bg-surface border border-line rounded-2xl p-5 flex items-center gap-4 shadow-sm">
+          <div className="w-12 h-12 rounded-full bg-ink text-paper flex items-center justify-center text-lg font-serif font-medium flex-shrink-0">
+            {user.username.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <p className="font-semibold text-sm truncate">{user.username}</p>
+            <p className="text-xs text-muted truncate">{user.email}</p>
+            <span className="inline-block mt-1 text-[10px] font-mono bg-paper border border-line px-2 py-0.5 rounded text-muted">
+              Member since {new Date(user.created_at).getFullYear()}
+            </span>
+          </div>
+        </div>
+
+        {/* One card per account */}
+        {accounts.map(acc => (
+          <div key={acc.id} className="bg-surface border border-line rounded-2xl p-5 flex flex-col justify-between shadow-sm min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted mb-3">
+              {acc.accountType === 'primary' ? '🏦 Checking' : acc.accountType === 'savings' ? '🏛 Savings' : '📈 Investments'}
+            </p>
+            <p className="text-xl font-serif tracking-tight truncate">₹{acc.balance.toLocaleString('en-IN')}</p>
+            <div className="mt-3 h-[2px] rounded-full" style={{
+              background: acc.accountType === 'primary'
+                ? 'linear-gradient(to right,#3b82f6,#6366f1)'
+                : acc.accountType === 'savings'
+                ? 'linear-gradient(to right,#10b981,#059669)'
+                : 'linear-gradient(to right,#f59e0b,#d97706)'
+            }} />
+          </div>
+        ))}
+
+        {/* Monthly Income */}
+        <div className="bg-surface border border-line rounded-2xl p-5 flex flex-col justify-between shadow-sm">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted mb-3">💼 Monthly Income</p>
+          <p className="text-xl font-serif tracking-tight">₹{user.monthly_income.toLocaleString('en-IN')}</p>
+          <p className="text-[10px] text-muted mt-2 font-mono">net / month</p>
+        </div>
+      </section>
 
       {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -208,21 +267,39 @@ export const Dashboard: React.FC = () => {
                   <span className="font-semibold text-ink">Calculation:</span> Primary Balance + Expected Income — Fixed Expenses — Active Goals — Outflows
                 </p>
               </div>
+              <div className="flex bg-paper rounded-lg p-1 border border-line self-start">
+                <button onClick={() => setTimeRange('all')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${timeRange === 'all' ? 'bg-ink text-paper shadow-sm' : 'text-muted hover:text-ink'}`}>All History</button>
+                <button onClick={() => setTimeRange('may')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${timeRange === 'may' ? 'bg-ink text-paper shadow-sm' : 'text-muted hover:text-ink'}`}>May</button>
+                <button onClick={() => setTimeRange('june')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${timeRange === 'june' ? 'bg-ink text-paper shadow-sm' : 'text-muted hover:text-ink'}`}>June</button>
+                <button onClick={() => setTimeRange('july')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${timeRange === 'july' ? 'bg-ink text-paper shadow-sm' : 'text-muted hover:text-ink'}`}>July</button>
+              </div>
             </div>
             
-            <DashboardChart forecast={forecastData} transactions={transactions} safeSpend={safeSpend} />
+            <DashboardChart forecast={forecastData} transactions={transactions} safeSpend={safeSpend} timeRange={timeRange} />
           </section>
 
           {/* Section C: Mini-Ledger */}
           <section className="bg-surface border border-line rounded-3xl p-8 shadow-sm flex-1 flex flex-col min-h-[400px]">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-lg font-serif">Live Ledger</h2>
-              <input 
-                type="text" placeholder="Search transactions..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-                className="bg-paper border border-line rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-ink w-64"
-              />
+              <div className="flex items-center gap-3">
+                <select 
+                  value={ledgerTimeRange} 
+                  onChange={e => setLedgerTimeRange(e.target.value as any)}
+                  className="bg-paper border border-line rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-ink cursor-pointer"
+                >
+                  <option value="all">All Months</option>
+                  <option value="may">May</option>
+                  <option value="june">June</option>
+                  <option value="july">July</option>
+                </select>
+                <input 
+                  type="text" placeholder="Search transactions..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                  className="bg-paper border border-line rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-ink w-64"
+                />
+              </div>
             </div>
-            <div className="flex-1 overflow-y-auto max-h-[300px] pr-2">
+            <div className="overflow-y-auto max-h-[500px] pr-2">
               <table className="w-full text-left border-collapse">
                 <tbody>
                   {filteredTxs.map(tx => (
@@ -322,26 +399,111 @@ export const Dashboard: React.FC = () => {
                 )}
               </div>
 
+              {/* Savings Goal Slider — redesigned */}
               <div className="border-t border-line pt-6">
-                <div className="flex justify-between items-center mb-4">
-                  <span className="text-sm font-medium text-ink">Target Savings Goal</span>
-                  <span className="text-sm font-mono text-ink bg-paper px-2 py-1 rounded border border-line">
+                <div className="flex justify-between items-center mb-5">
+                  <span className="text-sm font-medium text-ink">Target Savings</span>
+                  <span className="text-sm font-mono font-bold bg-ink text-paper px-3 py-1 rounded-lg">
                     {user.target_savings_percentage ?? 20}%
                   </span>
                 </div>
-                <input 
-                  type="range" 
-                  min="0" max="80" step="5"
-                  value={user.target_savings_percentage ?? 20}
-                  onChange={handleSavingsSliderChange}
-                  className="w-full h-2 bg-line rounded-lg appearance-none cursor-pointer accent-ink"
-                />
-                <div className="flex justify-between items-center mt-2 text-xs text-muted font-mono">
+
+                <div className="relative h-3 mb-4 flex items-center group cursor-pointer">
+                  {/* Visual Background Track */}
+                  <div className="absolute w-full h-3 bg-line rounded-full pointer-events-none" />
+                  
+                  {/* Visual Filled Track */}
+                  <div
+                    className="absolute h-3 rounded-full pointer-events-none"
+                    style={{
+                      width: `${((user.target_savings_percentage ?? 20) / 80) * 100}%`,
+                      background: 'linear-gradient(to right, #3b82f6, #6366f1)'
+                    }}
+                  />
+                  
+                  {/* Visible Thumb Handle */}
+                  <div 
+                    className="absolute w-5 h-5 bg-paper border-2 border-indigo-500 rounded-full shadow-md pointer-events-none transition-transform group-hover:scale-110"
+                    style={{
+                      left: `calc(${((user.target_savings_percentage ?? 20) / 80) * 100}% - 10px)`
+                    }}
+                  />
+
+                  {/* Invisible Input for Interaction */}
+                  <input
+                    type="range"
+                    min="0" max="80" step="5"
+                    value={user.target_savings_percentage ?? 20}
+                    onChange={handleSavingsSliderChange}
+                    className="w-full h-full absolute inset-0 cursor-pointer appearance-none opacity-0"
+                    style={{ zIndex: 10 }}
+                  />
+                </div>
+
+                <div className="flex justify-between text-[10px] font-mono text-muted mt-1">
                   <span>0%</span>
-                  <span>Saving ₹{dailySpendData.targetSavingsAmount.toLocaleString()}/mo</span>
+                  <span className="text-ink font-semibold">₹{dailySpendData.targetSavingsAmount.toLocaleString('en-IN')}/mo saved</span>
                   <span>80%</span>
                 </div>
               </div>
+            </div>
+          </section>
+
+          {/* New Section: Historical Savings Trajectory */}
+          <section className="bg-surface border border-line rounded-3xl p-8 shadow-sm">
+            <div className="mb-6">
+              <h2 className="text-lg font-serif">Savings Trajectory</h2>
+              <p className="text-xs text-muted mt-1">Net savings over the last 3 months.</p>
+            </div>
+            <div className="flex flex-col gap-4">
+              {[
+                { month: 4, name: 'May' },
+                { month: 5, name: 'June' },
+                { month: 6, name: 'July (Current)' }
+              ].map((m, idx) => {
+                const monthTxs = transactions.filter(t => new Date(t.transaction_date).getMonth() === m.month && t.status !== 'failed');
+                const mIncome = monthTxs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+                const mExpense = monthTxs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+                const saved = mIncome - mExpense;
+                
+                const isCurrent = m.month === 6;
+                let projected = saved;
+                if (isCurrent) {
+                  const currentDay = ANCHOR_DATE.getDate();
+                  const daysInMonth = new Date(ANCHOR_DATE.getFullYear(), ANCHOR_DATE.getMonth() + 1, 0).getDate();
+                  const remainingDays = daysInMonth - currentDay;
+                  
+                  // Calculate historical daily discretionary spend for a much more stable projection
+                  const historicalDiscretionary = transactions.filter(t => t.type === 'expense' && !t.is_recurring).reduce((s, t) => s + t.amount, 0);
+                  const daysOfHistory = 75; // Roughly May 1 to mid-July
+                  const dailyAvg = historicalDiscretionary / daysOfHistory;
+                  
+                  // Projected savings = Current savings - (Average historical daily spend * remaining days)
+                  projected = Math.round(saved - (dailyAvg * remainingDays));
+                }
+
+                return (
+                  <div key={m.month} className="flex flex-col gap-2">
+                    <div className="flex justify-between items-end">
+                      <span className="text-sm font-medium text-ink">{m.name}</span>
+                      <div className="text-right">
+                        <span className={`text-sm font-bold font-mono ${saved >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {saved >= 0 ? '+' : '-'}₹{Math.abs(saved).toLocaleString('en-IN')}
+                        </span>
+                        {isCurrent && (
+                          <span className="text-[10px] text-muted block">Projected: ₹{projected.toLocaleString('en-IN')}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="w-full h-2 bg-line rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full rounded-full ${saved >= 0 ? 'bg-success' : 'bg-danger'}`} 
+                        style={{ width: `${Math.min(100, Math.max(0, (saved / (user.monthly_income || 1)) * 100))}%`, opacity: isCurrent ? 0.6 : 1 }} 
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
 

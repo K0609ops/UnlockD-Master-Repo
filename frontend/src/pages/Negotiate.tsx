@@ -44,22 +44,12 @@ export const Negotiate: React.FC = () => {
       const math = simulate(enginePayload, numAmount, false);
       setMathData({ baselineSafe, ...math });
 
-      if (db.geminiApiKey) {
-        const aiRes = await runNegotiation(
-          db.geminiApiKey, merchant, numAmount, category,
+      const aiRes = await runNegotiation(
+          merchant, numAmount, category,
           baselineSafe, baselineSafe - math.safeSpendChange,
           math.baselineRisk, math.scenarioRisk
         );
         setResult(aiRes);
-      } else {
-        // Fallback without API key so user isn't blocked
-        setResult({
-          present_argument: `I really want this ${merchant} purchase, it brings immediate value.`,
-          future_argument: `This drops our safe spend and pushes our risk to ${math.scenarioRisk}.`,
-          resolution: math.scenarioRisk === 'storm' ? 'Skip it entirely.' : 'You are clear to buy.',
-          outcome: math.scenarioRisk === 'storm' ? 'skip' : 'proceed'
-        });
-      }
     } catch (err: any) {
       setError(err.message || 'Engine failed. Ensure you have enough transaction history.');
     } finally {

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { FinanceProvider } from './context/FinanceContext';
+import { useAuth } from './context/AuthContext';
 import { Splash } from './pages/Splash';
 import { Login } from './pages/Login';
 import { DataSetup } from './pages/DataSetup';
@@ -13,6 +14,7 @@ import { Goals } from './pages/Goals';
 import { Settings } from './pages/Settings';
 import { GlobalNav } from './components/GlobalNav';
 
+// Ambient background dots
 const DriftingDots = () => {
   const [scrollY, setScrollY] = useState(0);
 
@@ -54,6 +56,35 @@ const DriftingDots = () => {
   );
 };
 
+// Route guard: blocks unauthenticated access
+const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { currentUser, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-8 h-8 rounded-full border-2 border-line border-t-ink animate-spin" />
+      </div>
+    );
+  }
+
+  // Allow access if authenticated via Firebase OR via local email/password session
+  const localEmail = (() => {
+    try {
+      const saved = localStorage.getItem('finverse_db');
+      if (saved) return JSON.parse(saved)?.currentUserEmail ?? null;
+    } catch { return null; }
+    return null;
+  })();
+
+  if (!currentUser && !localEmail) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  return <>{children}</>;
+};
+
 export const App: React.FC = () => {
   return (
     <FinanceProvider>
@@ -62,16 +93,22 @@ export const App: React.FC = () => {
         <DriftingDots />
         <div className="relative z-10 max-w-7xl mx-auto">
           <Routes>
+            {/* Public routes */}
             <Route path="/" element={<Splash />} />
             <Route path="/login" element={<Login />} />
-            <Route path="/setup" element={<DataSetup />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/transactions" element={<Transactions />} />
-            <Route path="/negotiate" element={<Negotiate />} />
-            <Route path="/insights" element={<Insights />} />
-            <Route path="/ledger" element={<Ledger />} />
-            <Route path="/goals" element={<Goals />} />
-            <Route path="/settings" element={<Settings />} />
+
+            {/* Protected routes */}
+            <Route path="/setup" element={<ProtectedRoute><DataSetup /></ProtectedRoute>} />
+            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+            <Route path="/transactions" element={<ProtectedRoute><Transactions /></ProtectedRoute>} />
+            <Route path="/negotiate" element={<ProtectedRoute><Negotiate /></ProtectedRoute>} />
+            <Route path="/insights" element={<ProtectedRoute><Insights /></ProtectedRoute>} />
+            <Route path="/ledger" element={<ProtectedRoute><Ledger /></ProtectedRoute>} />
+            <Route path="/goals" element={<ProtectedRoute><Goals /></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+
+            {/* Fallback */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
       </div>

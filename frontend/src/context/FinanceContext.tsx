@@ -14,10 +14,10 @@ export interface User {
   id: string;
   email: string;
   username: string;
-  password?: string;
+  password?: string; // Only for local email/password accounts (not Google)
   monthly_income: number;
   hours_per_week: number;
-  target_savings_percentage?: number; // Phase 5: Dynamic daily pacing
+  target_savings_percentage?: number;
   created_at: string;
 }
 
@@ -35,8 +35,8 @@ export interface Transaction {
   regret_tag: 'good' | 'bad' | null;
   created_at: string;
   goal_id?: string;
-  
-  // Phase 4 Atomic Transfer Fields (CamelCase per Hackathon Gate Requirement)
+
+  // Atomic Transfer Fields
   fromAccountId?: string | null;
   toAccountId?: string | null;
   status?: 'pending' | 'completed' | 'failed' | 'reversed';
@@ -102,10 +102,9 @@ export interface DBState {
   contracts: Contract[];
   sacrifices: Sacrifice[];
   insights: Insight[];
-  
-  // App-specific session state
+
+  // Session state
   currentUserEmail: string | null;
-  geminiApiKey: string | null;
 }
 
 interface FinanceContextType {
@@ -122,7 +121,10 @@ interface FinanceContextType {
   ) => { success: boolean; error?: string; transaction?: Transaction };
 }
 
+import { apiClient } from '../api/client';
+
 const defaultDB: DBState = {
+  currentUserEmail: null,
   users: [],
   accounts: [],
   transactions: [],
@@ -131,8 +133,6 @@ const defaultDB: DBState = {
   contracts: [],
   sacrifices: [],
   insights: [],
-  currentUserEmail: null,
-  geminiApiKey: null
 };
 
 const FinanceContext = createContext<FinanceContextType | undefined>(undefined);
@@ -143,12 +143,12 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // Ensure legacy state gets new properties
+        const { geminiApiKey: _removed, ...clean } = parsed;
         return {
           ...defaultDB,
-          ...parsed,
-          accounts: parsed.accounts || [],
-          transactions: parsed.transactions || []
+          ...clean,
+          accounts: clean.accounts || [],
+          transactions: clean.transactions || [],
         };
       } catch (e) {
         console.error('Failed to parse saved DB', e);
@@ -156,6 +156,22 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
     return defaultDB;
   });
+
+  // Fetch real data from Postgres API whenever currentUserEmail changes
+  useEffect(() => {
+    if (db.currentUserEmail) {
+      apiClient.get<DBState>(`/finance/${encodeURIComponent(db.currentUserEmail)}/state`)
+        .then((state) => {
+          setDb(prev => ({
+            ...state,
+            currentUserEmail: prev.currentUserEmail
+          }));
+        })
+        .catch(err => {
+          console.error('Failed to fetch user state from backend API:', err);
+        });
+    }
+  }, [db.currentUserEmail]);
 
   useEffect(() => {
     localStorage.setItem('finverse_db', JSON.stringify(db));
@@ -177,14 +193,14 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     category: string,
     description: string
   ): { success: boolean; error?: string; transaction?: Transaction } => {
-    
-    // 1. Deduplication Guard (Idempotency Key Check)
+
+    // 1. Deduplication Guard
     const existingTx = db.transactions.find(tx => tx.idempotencyKey === idempotencyKey);
     if (existingTx) {
       return { success: existingTx.status === 'completed', transaction: existingTx };
     }
 
-    // 2. Fetch Account States
+    // 2. Fetch Accounts
     const fromAccount = db.accounts.find(acc => acc.id === fromAccountId);
     const toAccount = db.accounts.find(acc => acc.id === toAccountId);
 
@@ -192,14 +208,13 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return { success: false, error: 'INVALID_ACCOUNT' };
     }
 
-    // 3. Simulation Guard: Overdraft Prevention Check
+    // 3. Overdraft Prevention
     if (fromAccount.balance < amount) {
       const failedTx: Transaction = {
         id: 'tx_' + Date.now(),
         user_id: fromAccount.userId,
         type: 'transfer',
-        amount,
-        category,
+        amount, category,
         merchant: 'System',
         description,
         transaction_date: new Date().toISOString().split('T')[0],
@@ -207,27 +222,20 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         is_recurring: false,
         regret_tag: null,
         created_at: new Date().toISOString(),
-        fromAccountId: fromAccountId,
-        toAccountId: toAccountId,
+        fromAccountId, toAccountId,
         status: 'failed',
-        idempotencyKey: idempotencyKey
+        idempotencyKey,
       };
-      
-      updateDB(prev => ({
-        ...prev,
-        transactions: [failedTx, ...prev.transactions]
-      }));
-      
+      updateDB(prev => ({ ...prev, transactions: [failedTx, ...prev.transactions] }));
       return { success: false, error: 'INSUFFICIENT_FUNDS', transaction: failedTx };
     }
 
-    // 4. Executing State Transition: Mutate balance sets atomically
+    // 4. Atomic State Transition
     const completedTx: Transaction = {
       id: 'tx_' + Date.now(),
       user_id: fromAccount.userId,
       type: 'transfer',
-      amount,
-      category,
+      amount, category,
       merchant: 'System',
       description,
       transaction_date: new Date().toISOString().split('T')[0],
@@ -235,10 +243,9 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       is_recurring: false,
       regret_tag: null,
       created_at: new Date().toISOString(),
-      fromAccountId: fromAccountId,
-      toAccountId: toAccountId,
+      fromAccountId, toAccountId,
       status: 'completed',
-      idempotencyKey: idempotencyKey
+      idempotencyKey,
     };
 
     updateDB(prev => {
@@ -247,12 +254,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (acc.id === toAccountId) return { ...acc, balance: acc.balance + amount };
         return acc;
       });
-
-      return {
-        ...prev,
-        accounts: updatedAccounts,
-        transactions: [completedTx, ...prev.transactions]
-      };
+      return { ...prev, accounts: updatedAccounts, transactions: [completedTx, ...prev.transactions] };
     });
 
     return { success: true, transaction: completedTx };
@@ -271,11 +273,11 @@ export const useFinanceDB = () => {
   return context;
 };
 
-// Helper for the engine to get the current user's full subset of data
+// Helper to get the current user's full data subset
 export function getActiveUserData(db: DBState) {
   const user = db.users.find(u => u.email === db.currentUserEmail);
   if (!user) return null;
-  
+
   return {
     user,
     accounts: (db.accounts || []).filter(a => a.userId === user.id),
@@ -284,6 +286,6 @@ export function getActiveUserData(db: DBState) {
     goals: (db.goals || []).filter(g => g.user_id === user.id),
     contracts: (db.contracts || []).filter(c => c.user_id === user.id),
     sacrifices: (db.sacrifices || []).filter(s => s.user_id === user.id),
-    insights: (db.insights || []).filter(i => i.user_id === user.id)
+    insights: (db.insights || []).filter(i => i.user_id === user.id),
   };
 }

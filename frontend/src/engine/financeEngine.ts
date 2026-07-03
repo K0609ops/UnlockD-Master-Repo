@@ -1,5 +1,7 @@
 import type { Transaction, RecurringTransaction, Goal, DBState } from '../context/FinanceContext';
 
+// Anchor date for the demo data environment
+export const ANCHOR_DATE = new Date('2024-07-03T12:00:00Z');
 
 export interface ForecastPoint {
   date: string;
@@ -10,6 +12,7 @@ export interface ForecastPoint {
 interface UserData {
   monthlyIncome: number;
   balance: number;
+  target_savings_percentage?: number;
   transactions: Transaction[];
   recurring: RecurringTransaction[];
   goals: Goal[];
@@ -31,11 +34,24 @@ function validateDataSufficiency(transactions: Transaction[]) {
  */
 export function forecast_balance(data: UserData, days: number = 30): ForecastPoint[] {
   validateDataSufficiency(data.transactions);
-  
   const forecast: ForecastPoint[] = [];
-  let currentBalance = data.balance;
   
-  const today = new Date();
+  // Calculate base monthly disposable income to act as the monthly reset ceiling
+  const targetPct = data.target_savings_percentage ?? 20;
+  const targetSavingsAmount = (data.monthlyIncome * targetPct) / 100;
+  const totalFixedExpenses = data.recurring.reduce((s, b) => s + b.amount, 0);
+  const disposableIncome = data.monthlyIncome > 0 ? (data.monthlyIncome - targetSavingsAmount - totalFixedExpenses) : 0;
+  
+  let currentMargin = data.balance; 
+  const today = new Date(ANCHOR_DATE);
+  
+  // Calculate historical daily discretionary average for a stable decay rate
+  const thirtyDaysAgo = new Date(today);
+  thirtyDaysAgo.setDate(today.getDate() - 30);
+  const recentSpend = data.transactions
+    .filter(t => t.type === 'expense' && new Date(t.transaction_date) >= thirtyDaysAgo && !t.is_recurring)
+    .reduce((sum, t) => sum + t.amount, 0);
+  const dailyAvg = recentSpend / 30 || 0;
   
   for (let i = 0; i < days; i++) {
     const simDate = new Date(today);
@@ -45,34 +61,14 @@ export function forecast_balance(data: UserData, days: number = 30): ForecastPoi
     
     const factors: { name: string; amount: number; type: 'income' | 'expense' }[] = [];
     
-    // Simulate recurring bills triggering
-    data.recurring.forEach(bill => {
-      // Very naive scheduling: assuming they fall on the same day of month as next_expected_date
-      const billDay = new Date(bill.next_expected_date).getDate();
-      if (dayNum === billDay) {
-        currentBalance -= bill.amount;
-        factors.push({ name: bill.merchant, amount: bill.amount, type: 'expense' });
-      }
-    });
-
-    // Simulate average daily discretionary spend (from history)
-    // Here we compute average spend of the last 30 days.
-    const thirtyDaysAgo = new Date(today);
-    thirtyDaysAgo.setDate(today.getDate() - 30);
-    const recentSpend = data.transactions
-      .filter(t => t.type === 'expense' && new Date(t.transaction_date) >= thirtyDaysAgo && !t.is_recurring)
-      .reduce((sum, t) => sum + t.amount, 0);
-    
-    const dailyAvg = recentSpend / 30 || 0; // If no history, assume 0
-    
     if (dailyAvg > 0) {
-      currentBalance -= dailyAvg;
+      currentMargin -= dailyAvg;
       factors.push({ name: 'Avg Discretionary', amount: Math.round(dailyAvg), type: 'expense' });
     }
 
     forecast.push({
       date: dateStr,
-      predictedBalance: Math.round(currentBalance),
+      predictedBalance: Math.round(currentMargin),
       contributingFactors: factors
     });
   }
@@ -90,7 +86,7 @@ export function safe_to_spend(data: UserData): number {
   let safeAmount = data.balance;
   
   // Deduct all upcoming bills for the next 15 days
-  const today = new Date();
+  const today = new Date(ANCHOR_DATE);
   data.recurring.forEach(bill => {
     const billDate = new Date(bill.next_expected_date);
     const diffTime = Math.abs(billDate.getTime() - today.getTime());
@@ -175,40 +171,35 @@ export interface SafeToSpendPayload {
 }
 
 export const calculateSafeToSpend = ({ dbState, userId }: SafeToSpendPayload): number => {
-  // 1. Establish the Real Baseline Balance directly from the primary account entity
-  const primaryAccount = dbState.accounts?.find(
-    acc => acc.userId === userId && acc.accountType === 'primary'
-  );
-  const currentBaseline = primaryAccount ? primaryAccount.balance : 0;
-
-  // 2. Aggregate Committed Contracts (Recurring Bills)
-  const activeUser = dbState.users.find(u => u.id === userId);
-  const monthlyIncome = activeUser ? activeUser.monthly_income : 0;
-
+  const user = dbState.users.find(u => u.id === userId);
+  if (!user) return 0;
+  
+  const monthlyIncome = user.monthly_income;
+  const targetSavingsPct = user.target_savings_percentage ?? 20;
+  const targetSavingsAmount = (monthlyIncome * targetSavingsPct) / 100;
+  
   const totalFixedExpenses = (dbState.recurring_transactions || [])
     .filter(bill => bill.user_id === userId)
     .reduce((sum, bill) => sum + bill.amount, 0);
-
-  // 3. Aggregate Allocated Financial Targets (Goals)
-  const totalGoalCommitments = (dbState.goals || [])
-    .filter(goal => goal.user_id === userId && goal.current_amount < goal.target_amount)
-    .reduce((sum, goal) => sum + goal.current_amount, 0);
-
-  // 4. Track Variable Spending (Strict Ledger Status Filter)
-  // Completely isolate and ignore transactions with status 'failed' or 'pending'
-  const variableSpending = (dbState.transactions || [])
-    .filter((tx) => 
-      tx.user_id === userId && 
-      tx.status === 'completed' && 
-      tx.fromAccountId !== null &&
-      tx.fromAccountId !== undefined
-    )
+    
+  const disposableIncome = monthlyIncome - targetSavingsAmount - totalFixedExpenses;
+  
+  const now = new Date(ANCHOR_DATE);
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  
+  const spentThisMonth = (dbState.transactions || [])
+    .filter(tx => {
+      if (tx.user_id !== userId) return false;
+      if (tx.status === 'failed' || tx.status === 'pending') return false;
+      if (tx.type !== 'expense') return false;
+      
+      const txDate = new Date(tx.transaction_date);
+      return txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear && !tx.is_recurring;
+    })
     .reduce((sum, tx) => sum + tx.amount, 0);
-
-  // 5. Execute Pure Financial Formula
-  const safeToSpendMargin = (currentBaseline + monthlyIncome) - (totalFixedExpenses + totalGoalCommitments + variableSpending);
-
-  return Math.max(0, Math.round(safeToSpendMargin));
+    
+  return Math.max(0, Math.round(disposableIncome - spentThisMonth));
 };
 
 export interface DailySpendPayload {
@@ -233,7 +224,7 @@ export const calculateDailySpendLimit = ({ dbState, userId }: DailySpendPayload)
   const disposableIncome = monthlyIncome - targetSavingsAmount - totalFixedExpenses;
 
   // Track variable spending THIS MONTH
-  const now = new Date();
+  const now = new Date(ANCHOR_DATE);
   const currentMonth = now.getMonth();
   const currentYear = now.getFullYear();
 
