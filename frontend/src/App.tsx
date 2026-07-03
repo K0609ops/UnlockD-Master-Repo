@@ -12,6 +12,8 @@ import { Insights } from './pages/Insights';
 import { Ledger } from './pages/Ledger';
 import { Goals } from './pages/Goals';
 import { Settings } from './pages/Settings';
+import { Groups } from './pages/Groups';
+import { GroupDetails } from './pages/GroupDetails';
 import { GlobalNav } from './components/GlobalNav';
 
 // Ambient background dots
@@ -105,6 +107,8 @@ export const App: React.FC = () => {
             <Route path="/insights" element={<ProtectedRoute><Insights /></ProtectedRoute>} />
             <Route path="/ledger" element={<ProtectedRoute><Ledger /></ProtectedRoute>} />
             <Route path="/goals" element={<ProtectedRoute><Goals /></ProtectedRoute>} />
+            <Route path="/groups" element={<ProtectedRoute><Groups /></ProtectedRoute>} />
+            <Route path="/groups/:groupId" element={<ProtectedRoute><GroupDetails /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
 
             {/* Fallback */}

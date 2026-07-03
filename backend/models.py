@@ -25,6 +25,7 @@ class User(Base):
     contracts = relationship("Contract", back_populates="user", cascade="all, delete-orphan")
     sacrifices = relationship("Sacrifice", back_populates="user", cascade="all, delete-orphan")
     insights = relationship("Insight", back_populates="user", cascade="all, delete-orphan")
+    groups = relationship("Group", back_populates="user", cascade="all, delete-orphan")
 
 class Account(Base):
     __tablename__ = "accounts"
@@ -120,3 +121,68 @@ class Insight(Base):
     detected_at = Column(String)
 
     user = relationship("User", back_populates="insights")
+
+class Group(Base):
+    __tablename__ = "groups"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), index=True) # Creator
+    name = Column(String)
+    created_at = Column(String)
+
+    user = relationship("User", back_populates="groups")
+    members = relationship("GroupMember", back_populates="group", cascade="all, delete-orphan")
+    expenses = relationship("GroupExpense", back_populates="group", cascade="all, delete-orphan")
+    settlements = relationship("Settlement", back_populates="group", cascade="all, delete-orphan")
+
+class GroupMember(Base):
+    __tablename__ = "group_members"
+
+    id = Column(String, primary_key=True, index=True)
+    group_id = Column(String, ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    name = Column(String)
+    user_id = Column(String, nullable=True) # Optional link to registered user
+
+    group = relationship("Group", back_populates="members")
+    splits = relationship("ExpenseSplit", back_populates="member", cascade="all, delete-orphan")
+
+class GroupExpense(Base):
+    __tablename__ = "group_expenses"
+
+    id = Column(String, primary_key=True, index=True)
+    group_id = Column(String, ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    description = Column(String)
+    amount = Column(Float)
+    paid_by = Column(String, ForeignKey("group_members.id", ondelete="CASCADE")) # Which member paid
+    date = Column(String)
+    created_at = Column(String)
+
+    group = relationship("Group", back_populates="expenses")
+    payer = relationship("GroupMember")
+    splits = relationship("ExpenseSplit", back_populates="expense", cascade="all, delete-orphan")
+
+class ExpenseSplit(Base):
+    __tablename__ = "expense_splits"
+
+    id = Column(String, primary_key=True, index=True)
+    expense_id = Column(String, ForeignKey("group_expenses.id", ondelete="CASCADE"), index=True)
+    member_id = Column(String, ForeignKey("group_members.id", ondelete="CASCADE"), index=True)
+    amount_owed = Column(Float)
+
+    expense = relationship("GroupExpense", back_populates="splits")
+    member = relationship("GroupMember", back_populates="splits")
+
+class Settlement(Base):
+    __tablename__ = "settlements"
+
+    id = Column(String, primary_key=True, index=True)
+    group_id = Column(String, ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    paid_by = Column(String, ForeignKey("group_members.id", ondelete="CASCADE"))
+    paid_to = Column(String, ForeignKey("group_members.id", ondelete="CASCADE"))
+    amount = Column(Float)
+    date = Column(String, nullable=True)
+    status = Column(String) # 'pending', 'completed'
+
+    group = relationship("Group", back_populates="settlements")
+    payer = relationship("GroupMember", foreign_keys=[paid_by])
+    payee = relationship("GroupMember", foreign_keys=[paid_to])

@@ -93,6 +93,47 @@ export interface Insight {
   detected_at: string;
 }
 
+export interface Group {
+  id: string;
+  user_id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface GroupMember {
+  id: string;
+  group_id: string;
+  name: string;
+  user_id?: string | null;
+}
+
+export interface GroupExpense {
+  id: string;
+  group_id: string;
+  description: string;
+  amount: number;
+  paid_by: string;
+  date: string;
+  created_at: string;
+}
+
+export interface ExpenseSplit {
+  id: string;
+  expense_id: string;
+  member_id: string;
+  amount_owed: number;
+}
+
+export interface Settlement {
+  id: string;
+  group_id: string;
+  paid_by: string;
+  paid_to: string;
+  amount: number;
+  date?: string | null;
+  status: 'pending' | 'completed';
+}
+
 export interface DBState {
   users: User[];
   accounts: Account[];
@@ -102,6 +143,13 @@ export interface DBState {
   contracts: Contract[];
   sacrifices: Sacrifice[];
   insights: Insight[];
+
+  // Groups and Bill Splitting
+  groups: Group[];
+  group_members: GroupMember[];
+  group_expenses: GroupExpense[];
+  expense_splits: ExpenseSplit[];
+  settlements: Settlement[];
 
   // Session state
   currentUserEmail: string | null;
@@ -133,6 +181,11 @@ const defaultDB: DBState = {
   contracts: [],
   sacrifices: [],
   insights: [],
+  groups: [],
+  group_members: [],
+  group_expenses: [],
+  expense_splits: [],
+  settlements: [],
 };
 
 const FinanceContext = createContext<FinanceContextType | undefined>(undefined);
@@ -149,6 +202,11 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ...clean,
           accounts: clean.accounts || [],
           transactions: clean.transactions || [],
+          groups: clean.groups || [],
+          group_members: clean.group_members || [],
+          group_expenses: clean.group_expenses || [],
+          expense_splits: clean.expense_splits || [],
+          settlements: clean.settlements || [],
         };
       } catch (e) {
         console.error('Failed to parse saved DB', e);
@@ -287,5 +345,10 @@ export function getActiveUserData(db: DBState) {
     contracts: (db.contracts || []).filter(c => c.user_id === user.id),
     sacrifices: (db.sacrifices || []).filter(s => s.user_id === user.id),
     insights: (db.insights || []).filter(i => i.user_id === user.id),
+    groups: (db.groups || []).filter(g => g.user_id === user.id),
+    group_members: db.group_members || [],
+    group_expenses: db.group_expenses || [],
+    expense_splits: db.expense_splits || [],
+    settlements: db.settlements || [],
   };
 }

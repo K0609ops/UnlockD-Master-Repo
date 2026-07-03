@@ -100,6 +100,47 @@ class InsightBase(BaseModel):
     detected_at: str
     model_config = {"from_attributes": True}
 
+class GroupBase(BaseModel):
+    id: str
+    user_id: str
+    name: str
+    created_at: str
+    model_config = {"from_attributes": True}
+
+class GroupMemberBase(BaseModel):
+    id: str
+    group_id: str
+    name: str
+    user_id: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+class GroupExpenseBase(BaseModel):
+    id: str
+    group_id: str
+    description: str
+    amount: float
+    paid_by: str
+    date: str
+    created_at: str
+    model_config = {"from_attributes": True}
+
+class ExpenseSplitBase(BaseModel):
+    id: str
+    expense_id: str
+    member_id: str
+    amount_owed: float
+    model_config = {"from_attributes": True}
+
+class SettlementBase(BaseModel):
+    id: str
+    group_id: str
+    paid_by: str
+    paid_to: str
+    amount: float
+    date: Optional[str] = None
+    status: str
+    model_config = {"from_attributes": True}
+
 class DBStateResponse(BaseModel):
     currentUserEmail: Optional[str] = None
     users: List[dict]
@@ -110,6 +151,11 @@ class DBStateResponse(BaseModel):
     contracts: List[ContractBase]
     sacrifices: List[SacrificeBase]
     insights: List[InsightBase]
+    groups: List[GroupBase] = []
+    group_members: List[GroupMemberBase] = []
+    group_expenses: List[GroupExpenseBase] = []
+    expense_splits: List[ExpenseSplitBase] = []
+    settlements: List[SettlementBase] = []
 
 class UserUpdate(BaseModel):
     target_savings_percentage: Optional[float] = None

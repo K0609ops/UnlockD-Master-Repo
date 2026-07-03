@@ -200,6 +200,7 @@ export const Dashboard: React.FC = () => {
         <div className="flex items-center gap-3">
           <Link to="/insights" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Insights</Link>
           <Link to="/goals" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Goals</Link>
+          <Link to="/groups" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Groups</Link>
           <Link to="/settings" className="flex items-center gap-2 px-4 py-2 bg-ink text-paper rounded-xl text-sm font-medium hover:shadow-lg transition-shadow">
             <SettingsIcon className="w-4 h-4" />
             Settings

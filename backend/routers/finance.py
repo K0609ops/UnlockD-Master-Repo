@@ -30,6 +30,30 @@ async def get_user_state(email: str, db: AsyncSession = Depends(get_db)):
     sacrifices_res = await db.execute(select(models.Sacrifice).where(models.Sacrifice.user_id == user_id))
     insights_res = await db.execute(select(models.Insight).where(models.Insight.user_id == user_id))
 
+    # Fetch groups created by user or where user is a member (for simplicity, we'll fetch groups where user is creator, and their related data)
+    # Since this is a demo app, we'll just fetch groups where user_id = user_id
+    groups_res = await db.execute(select(models.Group).where(models.Group.user_id == user_id))
+    groups = groups_res.scalars().all()
+    group_ids = [g.id for g in groups]
+
+    if group_ids:
+        members_res = await db.execute(select(models.GroupMember).where(models.GroupMember.group_id.in_(group_ids)))
+        expenses_res = await db.execute(select(models.GroupExpense).where(models.GroupExpense.group_id.in_(group_ids)))
+        settlements_res = await db.execute(select(models.Settlement).where(models.Settlement.group_id.in_(group_ids)))
+        
+        expenses = expenses_res.scalars().all()
+        expense_ids = [e.id for e in expenses]
+        if expense_ids:
+            splits_res = await db.execute(select(models.ExpenseSplit).where(models.ExpenseSplit.expense_id.in_(expense_ids)))
+            splits = splits_res.scalars().all()
+        else:
+            splits = []
+            
+        members = members_res.scalars().all()
+        settlements = settlements_res.scalars().all()
+    else:
+        members, expenses, splits, settlements = [], [], [], []
+
     # Construct DBStateResponse
     state = {
         "currentUserEmail": user.email,
@@ -50,6 +74,11 @@ async def get_user_state(email: str, db: AsyncSession = Depends(get_db)):
         "contracts": contracts_res.scalars().all(),
         "sacrifices": sacrifices_res.scalars().all(),
         "insights": insights_res.scalars().all(),
+        "groups": groups,
+        "group_members": members,
+        "group_expenses": expenses,
+        "expense_splits": splits,
+        "settlements": settlements,
     }
 
     return state
