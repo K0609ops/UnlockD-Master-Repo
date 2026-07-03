@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
 import { QuickAddTransaction } from '../components/QuickAddTransaction';
+import { ImportStatement } from '../components/ImportStatement';
 
 export const Transactions: React.FC = () => {
   const { db, updateDB } = useFinanceDB();
@@ -39,7 +40,8 @@ export const Transactions: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 flex flex-col gap-6">
+          <ImportStatement />
           <QuickAddTransaction />
         </div>
 

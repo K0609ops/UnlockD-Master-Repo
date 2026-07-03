@@ -7,6 +7,7 @@ import { runNegotiation } from '../ai/geminiClient';
 import type { NegotiationResult } from '../ai/geminiClient';
 import { DashboardChart } from '../components/DashboardChart';
 import { QuickAddTransaction } from '../components/QuickAddTransaction';
+import { ImportStatement } from '../components/ImportStatement';
 import { Settings as SettingsIcon, Trash2 } from 'lucide-react';
 
 const CATEGORIES = [
@@ -198,6 +199,7 @@ export const Dashboard: React.FC = () => {
           </h1>
         </div>
         <div className="flex items-center gap-3">
+          <Link to="/transactions" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Ledger</Link>
           <Link to="/insights" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Insights</Link>
           <Link to="/goals" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Goals</Link>
           <Link to="/groups" className="px-4 py-2 text-sm font-medium text-muted hover:text-ink border border-line rounded-xl bg-surface hover:bg-paper transition-colors">Groups</Link>
@@ -278,6 +280,8 @@ export const Dashboard: React.FC = () => {
             
             <DashboardChart forecast={forecastData} transactions={transactions} safeSpend={safeSpend} timeRange={timeRange} />
           </section>
+
+          <ImportStatement />
 
           {/* Section C: Mini-Ledger */}
           <section className="bg-surface border border-line rounded-3xl p-8 shadow-sm flex-1 flex flex-col min-h-[400px]">

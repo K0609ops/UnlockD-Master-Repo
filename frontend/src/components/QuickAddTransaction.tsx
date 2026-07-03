@@ -77,6 +77,14 @@ export const QuickAddTransaction: React.FC<QuickAddProps> = ({ onAdd, hideTransf
           g.id === selectedGoalId ? { ...g, current_amount: g.current_amount + numAmount } : g
         );
       }
+      
+      const primaryIdx = nextPrev.accounts.findIndex(a => a.accountType === 'primary');
+      if (primaryIdx !== -1) {
+        const netChange = type === 'income' ? numAmount : -numAmount;
+        nextPrev.accounts = nextPrev.accounts.map((acc, idx) => 
+          idx === primaryIdx ? { ...acc, balance: acc.balance + netChange } : acc
+        );
+      }
 
       return nextPrev;
     });

@@ -2,6 +2,7 @@ import React from 'react';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Link } from 'react-router-dom';
+import { AnalyticsCharts } from '../components/AnalyticsCharts';
 
 export const Insights: React.FC = () => {
   const { db } = useFinanceDB();
@@ -73,6 +74,8 @@ export const Insights: React.FC = () => {
           <button onClick={() => setTimeRange('july')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${timeRange === 'july' ? 'bg-ink text-paper shadow-sm' : 'text-muted hover:text-ink'}`}>July</button>
         </div>
       </header>
+
+      <AnalyticsCharts />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         
