@@ -72,14 +72,23 @@ async def add_expense(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    # Verify group ownership
-    res = await db.execute(
-        select(models.Group).where(
-            models.Group.id == group_id,
-            models.Group.user_id == current_user.id,
+    # Verify group ownership or membership
+    grp_res = await db.execute(select(models.Group).where(models.Group.id == group_id))
+    grp = grp_res.scalar_one_or_none()
+    if not grp:
+        raise HTTPException(status_code=404, detail="Group not found.")
+        
+    is_owner = grp.user_id == current_user.id
+    
+    member_res = await db.execute(
+        select(models.GroupMember).where(
+            models.GroupMember.group_id == group_id,
+            models.GroupMember.user_id == current_user.id
         )
     )
-    if not res.scalar_one_or_none():
+    is_member = member_res.scalar_one_or_none() is not None
+    
+    if not (is_owner or is_member):
         raise HTTPException(status_code=403, detail="Not your group.")
 
     from datetime import date as date_type
@@ -112,6 +121,11 @@ async def calculate_settlements(group_id: str, db: AsyncSession):
     Greedy netting algorithm — minimises number of transactions.
     FIXED: uses Decimal arithmetic throughout to avoid float drift.
     """
+    # Lock the group to serialize settlement calculations
+    await db.execute(
+        select(models.Group).where(models.Group.id == group_id).with_for_update()
+    )
+
     expenses_res = await db.execute(
         select(models.GroupExpense).where(models.GroupExpense.group_id == group_id)
     )
@@ -192,14 +206,23 @@ async def pay_settlement(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    # Verify group ownership
-    grp_res = await db.execute(
-        select(models.Group).where(
-            models.Group.id == group_id,
-            models.Group.user_id == current_user.id,
+    # Verify group ownership or membership
+    grp_res = await db.execute(select(models.Group).where(models.Group.id == group_id))
+    grp = grp_res.scalar_one_or_none()
+    if not grp:
+        raise HTTPException(status_code=404, detail="Group not found.")
+        
+    is_owner = grp.user_id == current_user.id
+    
+    member_res = await db.execute(
+        select(models.GroupMember).where(
+            models.GroupMember.group_id == group_id,
+            models.GroupMember.user_id == current_user.id
         )
     )
-    if not grp_res.scalar_one_or_none():
+    is_member = member_res.scalar_one_or_none() is not None
+    
+    if not (is_owner or is_member):
         raise HTTPException(status_code=403, detail="Not your group.")
 
     res = await db.execute(

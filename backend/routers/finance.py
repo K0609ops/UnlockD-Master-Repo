@@ -191,7 +191,7 @@ async def add_transaction(
             select(models.Goal).where(
                 models.Goal.id == payload.goal_id,
                 models.Goal.user_id == current_user.id,
-            )
+            ).with_for_update()
         )
         goal = goal_res.scalar_one_or_none()
         if goal:
@@ -202,7 +202,7 @@ async def add_transaction(
         select(models.Account).where(
             models.Account.user_id == current_user.id,
             models.Account.accountType == "primary",
-        )
+        ).with_for_update()
     )
     primary = acc_res.scalar_one_or_none()
     if primary:
@@ -232,6 +232,46 @@ async def delete_transaction(
     tx = res.scalar_one_or_none()
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found.")
+
+    if tx.type != "transfer":
+        acc_res = await db.execute(
+            select(models.Account).where(
+                models.Account.user_id == current_user.id,
+                models.Account.accountType == "primary",
+            ).with_for_update()
+        )
+        primary = acc_res.scalar_one_or_none()
+        if primary:
+            delta = tx.amount if tx.type == "income" else -tx.amount
+            primary.balance = primary.balance - delta
+
+        if tx.type == "goal" and tx.goal_id:
+            goal_res = await db.execute(
+                select(models.Goal).where(
+                    models.Goal.id == tx.goal_id,
+                    models.Goal.user_id == current_user.id,
+                ).with_for_update()
+            )
+            goal = goal_res.scalar_one_or_none()
+            if goal:
+                goal.current_amount = goal.current_amount - tx.amount
+    else:
+        if tx.from_account_id:
+            from_res = await db.execute(
+                select(models.Account).where(models.Account.id == tx.from_account_id).with_for_update()
+            )
+            from_acc = from_res.scalar_one_or_none()
+            if from_acc:
+                from_acc.balance = from_acc.balance + tx.amount
+                
+        if tx.to_account_id:
+            to_res = await db.execute(
+                select(models.Account).where(models.Account.id == tx.to_account_id).with_for_update()
+            )
+            to_acc = to_res.scalar_one_or_none()
+            if to_acc:
+                to_acc.balance = to_acc.balance - tx.amount
+
     await db.delete(tx)
     await db.commit()
     return {"status": "deleted"}
