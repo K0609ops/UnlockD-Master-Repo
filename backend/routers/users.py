@@ -4,19 +4,19 @@ from sqlalchemy import select
 
 from database import get_db
 from models import User
-from schemas import UserResponse
+from schemas import UserPublic
 
 router = APIRouter()
 
 
-@router.get("/me/{user_id}", response_model=UserResponse)
+@router.get("/me/{user_id}", response_model=UserPublic)
 async def get_user(user_id: str, db: AsyncSession = Depends(get_db)):
     """Retrieve a user by their Firebase UID."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    return UserResponse.model_validate(user)
+    return UserPublic.model_validate(user)
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@ import { DashboardChart } from '../components/DashboardChart';
 import { QuickAddTransaction } from '../components/QuickAddTransaction';
 import { ImportStatement } from '../components/ImportStatement';
 import { Settings as SettingsIcon, Trash2 } from 'lucide-react';
+import Decimal from 'decimal.js';
+import { apiClient } from '../api/client';
 
 const CATEGORIES = [
   'Dining', 'Groceries', 'Transport', 'Entertainment', 'Shopping', 
@@ -16,7 +18,7 @@ const CATEGORIES = [
 ];
 
 export const Dashboard: React.FC = () => {
-  const { db, updateDB } = useFinanceDB();
+  const { db, updateDB, refreshFromBackend } = useFinanceDB();
   const activeData = getActiveUserData(db);
 
   // --- Negotiation State ---
@@ -57,8 +59,11 @@ export const Dashboard: React.FC = () => {
   // Engine Execution for Overview
   const primaryAccounts = accounts.filter(a => a.accountType === 'primary');
   const liquidBalance = accounts.length > 0
-    ? primaryAccounts.reduce((sum, a) => sum + a.balance, 0)
-    : transactions.reduce((sum, t) => sum + (t.type === 'income' ? t.amount : (t.type === 'expense' || t.type === 'goal' ? -t.amount : 0)), 0);
+    ? primaryAccounts.reduce((sum, a) => new Decimal(sum).plus(a.balance).toNumber(), 0)
+    : transactions.reduce((sum, t) => {
+        const val = t.type === 'income' ? new Decimal(t.amount) : (t.type === 'expense' || t.type === 'goal' ? new Decimal(t.amount).negated() : new Decimal(0));
+        return new Decimal(sum).plus(val).toNumber();
+      }, 0);
 
   let safeSpend = 0;
   let forecastData: any[] = [];
@@ -116,41 +121,61 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const handleOutcome = (action: 'buy' | 'skip') => {
+  const handleOutcome = async (action: 'buy' | 'skip') => {
     if (!negResult) return;
     const numAmount = Number(negAmount);
-    if (action === 'buy') {
-      const newTx = {
-        id: 'tx_' + Date.now(),
-        user_id: user.id, type: 'expense' as const, amount: numAmount, category: negCategory,
-        merchant: negMerchant, description: 'Negotiated purchase',
-        transaction_date: new Date().toISOString().split('T')[0],
-        payment_method: 'Card', is_recurring: false, regret_tag: null, created_at: new Date().toISOString()
-      };
-      updateDB(prev => ({ ...prev, transactions: [newTx, ...prev.transactions] }));
-    } else {
-      const newSacrifice = {
-        id: 'sac_' + Date.now(), user_id: user.id, amount_saved: numAmount, category: negCategory,
-        resolved_at: new Date().toISOString(), goal_days_saved: 0
-      };
-      updateDB(prev => ({ ...prev, sacrifices: [newSacrifice, ...prev.sacrifices] }));
+    try {
+      if (action === 'buy') {
+        await apiClient.post('/finance/transactions', {
+          type: 'expense',
+          amount: numAmount,
+          category: negCategory,
+          merchant: negMerchant,
+          description: 'Negotiated purchase',
+          transaction_date: new Date().toISOString().split('T')[0],
+          payment_method: 'Card',
+          is_recurring: false,
+        });
+      } else {
+        await apiClient.post('/finance/sacrifices', {
+          amount_saved: numAmount,
+          category: negCategory,
+          goal_days_saved: 0,
+        });
+      }
+      await refreshFromBackend();
+    } catch (err) {
+      console.error('Failed to log negotiation outcome:', err);
     }
     setNegResult(null); setNegAmount(''); setNegMerchant('');
   };
 
   // --- Ledger Handlers ---
-  const handleToggleRegret = (txId: string, current: 'good' | 'bad' | null) => {
+  const handleToggleRegret = async (txId: string, current: 'good' | 'bad' | null) => {
     const nextVal = current === null ? 'bad' : current === 'bad' ? 'good' : null;
     updateDB(prev => ({
       ...prev, transactions: prev.transactions.map(t => t.id === txId ? { ...t, regret_tag: nextVal } : t)
     }));
+    try {
+      await apiClient.patch(`/finance/transactions/${txId}`, { regret_tag: nextVal });
+    } catch (err) {
+      console.error('Failed to update regret tag:', err);
+      updateDB(prev => ({
+        ...prev, transactions: prev.transactions.map(t => t.id === txId ? { ...t, regret_tag: current } : t)
+      }));
+    }
   };
   
-  const handleDeleteTransaction = (txId: string) => {
-    if (window.confirm('Are you sure you want to delete this transaction? This will permanently remove it from your ledger and recalculate your margins.')) {
-      updateDB(prev => ({
-        ...prev, transactions: prev.transactions.filter(t => t.id !== txId)
-      }));
+  const handleDeleteTransaction = async (txId: string) => {
+    if (window.confirm('Delete this transaction?')) {
+      const tx = transactions.find(t => t.id === txId);
+      updateDB(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== txId) }));
+      try {
+        await apiClient.delete(`/finance/transactions/${txId}`);
+      } catch (err) {
+        console.error('Failed to delete:', err);
+        if (tx) updateDB(prev => ({ ...prev, transactions: [tx, ...prev.transactions] }));
+      }
     }
   };
   
@@ -178,11 +203,9 @@ export const Dashboard: React.FC = () => {
     }));
     
     // Persist to Postgres
-    import('../api/client').then(({ apiClient }) => {
-      apiClient.patch(`/finance/${encodeURIComponent(user.email)}`, {
-        target_savings_percentage: val
-      }).catch(err => console.error('Failed to persist target savings:', err));
-    });
+    apiClient.patch('/finance/preferences', {
+      target_savings_percentage: val
+    }).catch(err => console.error('Failed to persist target savings:', err));
   };
 
   return (
@@ -467,8 +490,8 @@ export const Dashboard: React.FC = () => {
                 { month: 6, name: 'July (Current)' }
               ].map((m, idx) => {
                 const monthTxs = transactions.filter(t => new Date(t.transaction_date).getMonth() === m.month && t.status !== 'failed');
-                const mIncome = monthTxs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-                const mExpense = monthTxs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+                const mIncome = monthTxs.filter(t => t.type === 'income').reduce((s, t) => new Decimal(s).plus(t.amount).toNumber(), 0);
+                const mExpense = monthTxs.filter(t => t.type === 'expense').reduce((s, t) => new Decimal(s).plus(t.amount).toNumber(), 0);
                 const saved = mIncome - mExpense;
                 
                 const isCurrent = m.month === 6;
@@ -479,7 +502,7 @@ export const Dashboard: React.FC = () => {
                   const remainingDays = daysInMonth - currentDay;
                   
                   // Calculate historical daily discretionary spend for a much more stable projection
-                  const historicalDiscretionary = transactions.filter(t => t.type === 'expense' && !t.is_recurring).reduce((s, t) => s + t.amount, 0);
+                  const historicalDiscretionary = transactions.filter(t => t.type === 'expense' && !t.is_recurring).reduce((s, t) => new Decimal(s).plus(t.amount).toNumber(), 0);
                   const daysOfHistory = 75; // Roughly May 1 to mid-July
                   const dailyAvg = historicalDiscretionary / daysOfHistory;
                   

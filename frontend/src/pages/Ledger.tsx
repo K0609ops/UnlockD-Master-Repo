@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
+import Decimal from 'decimal.js';
 
 export const Ledger: React.FC = () => {
   const { db } = useFinanceDB();
@@ -16,7 +17,7 @@ export const Ledger: React.FC = () => {
     })
     .sort((a, b) => new Date(b.resolved_at).getTime() - new Date(a.resolved_at).getTime());
 
-  const totalSaved = filteredSacrifices.reduce((sum, s) => sum + s.amount_saved, 0);
+  const totalSaved = filteredSacrifices.reduce((sum, s) => new Decimal(sum).plus(s.amount_saved).toNumber(), 0);
 
   return (
     <div className="min-h-screen p-6 py-12 max-w-5xl mx-auto animate-fade-in-up">

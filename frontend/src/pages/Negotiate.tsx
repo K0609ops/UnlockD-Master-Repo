@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Decimal from 'decimal.js';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
-import { simulate, safe_to_spend } from '../engine/financeEngine';
+import { simulate, safe_to_spend, calculateSafeToSpend } from '../engine/financeEngine';
 import { runNegotiation } from '../ai/geminiClient';
 import type { NegotiationResult } from '../ai/geminiClient';
+import { apiClient } from '../api/client';
 
 export const Negotiate: React.FC = () => {
   const navigate = useNavigate();
@@ -32,9 +34,11 @@ export const Negotiate: React.FC = () => {
 
     try {
       const numAmount = Number(amount);
+      const safeSpend = calculateSafeToSpend({ dbState: db, userId: activeData.user.id });
+
       const enginePayload = {
         monthlyIncome: activeData.user.monthly_income,
-        balance: activeData.transactions.reduce((sum, t) => sum + (t.type === 'income' ? t.amount : -t.amount), 0),
+        balance: safeSpend,
         transactions: activeData.transactions,
         recurring: activeData.recurring,
         goals: activeData.goals
@@ -57,39 +61,60 @@ export const Negotiate: React.FC = () => {
     }
   };
 
-  const handleOutcome = (action: 'buy' | 'skip') => {
+  const handleOutcome = async (action: 'buy' | 'skip') => {
     if (!result) return;
     const numAmount = Number(amount);
     
-    if (action === 'buy') {
-      const newTx = {
-        id: 'tx_' + Date.now(),
-        user_id: activeData.user.id,
-        type: 'expense' as const,
-        amount: numAmount,
-        category,
-        merchant,
-        description: 'Negotiated purchase',
-        transaction_date: new Date().toISOString().split('T')[0],
-        payment_method: 'Card',
-        is_recurring: false,
-        regret_tag: null,
-        created_at: new Date().toISOString()
-      };
-      updateDB(prev => ({ ...prev, transactions: [newTx, ...prev.transactions] }));
-    } else {
-      const newSacrifice = {
-        id: 'sac_' + Date.now(),
-        user_id: activeData.user.id,
-        amount_saved: numAmount,
-        category,
-        resolved_at: new Date().toISOString(),
-        goal_days_saved: 0 // Simplification for now
-      };
-      updateDB(prev => ({ ...prev, sacrifices: [newSacrifice, ...prev.sacrifices] }));
+    try {
+      if (action === 'buy') {
+        await apiClient.post('/finance/transactions', {
+          type: 'expense',
+          amount: numAmount,
+          category,
+          merchant,
+          description: 'Negotiated purchase',
+          transaction_date: new Date().toISOString().split('T')[0],
+          is_recurring: false,
+        });
+        
+        const newTx = {
+          id: 'tx_' + Date.now(),
+          user_id: activeData.user.id,
+          type: 'expense' as const,
+          amount: numAmount,
+          category,
+          merchant,
+          description: 'Negotiated purchase',
+          transaction_date: new Date().toISOString().split('T')[0],
+          payment_method: 'Card',
+          is_recurring: false,
+          regret_tag: null,
+          created_at: new Date().toISOString()
+        };
+        updateDB(prev => ({ ...prev, transactions: [newTx, ...prev.transactions] }));
+      } else {
+        await apiClient.post('/finance/sacrifices', {
+          amount_saved: numAmount,
+          category,
+          goal_days_saved: 0,
+        });
+
+        const newSacrifice = {
+          id: 'sac_' + Date.now(),
+          user_id: activeData.user.id,
+          amount_saved: numAmount,
+          category,
+          resolved_at: new Date().toISOString(),
+          goal_days_saved: 0
+        };
+        updateDB(prev => ({ ...prev, sacrifices: [newSacrifice, ...prev.sacrifices] }));
+      }
+      
+      navigate('/dashboard');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to log outcome.');
     }
-    
-    navigate('/dashboard');
   };
 
   return (

@@ -263,7 +263,7 @@ export const ImportStatement: React.FC = () => {
                       </span>
                     </td>
                     <td className={`p-3 text-right font-mono font-bold ${tx.type === 'income' ? 'text-success' : 'text-ink'}`}>
-                      {tx.type === 'income' ? '+' : '-'}₹{tx.amount.toFixed(2)}
+                      {tx.type === 'income' ? '+' : '-'}₹{Number(tx.amount).toFixed(2)}
                     </td>
                   </tr>
                 ))}

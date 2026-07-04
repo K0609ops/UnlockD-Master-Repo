@@ -1,9 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from database import engine, Base
 from routers import auth, users, finance, groups
+from limiter import limiter
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,6 +21,8 @@ app = FastAPI(
     description="FINVERSE Backend — Financial Intelligence Engine with PostgreSQL persistence.",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,7 +40,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
-app.include_router(finance.router, prefix="/finance", tags=["Finance State"])
+app.include_router(finance.router, prefix="/finance", tags=["Finance"])
 app.include_router(groups.router, prefix="/groups", tags=["Groups & Bill Splitting"])
 
 

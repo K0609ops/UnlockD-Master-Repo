@@ -3,6 +3,7 @@ import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Link } from 'react-router-dom';
 import { AnalyticsCharts } from '../components/AnalyticsCharts';
+import Decimal from 'decimal.js';
 
 export const Insights: React.FC = () => {
   const { db } = useFinanceDB();
@@ -43,20 +44,20 @@ export const Insights: React.FC = () => {
 
   // Financial Archaeology - Goal Closing Logic
   // Given a real goal, sort real non-essential transactions descending, greedily select until gap closes.
-  const activeGoal = activeData.goals.find(g => g.target_amount > g.current_amount);
+  const activeGoal = activeData.goals.find(g => Number(g.target_amount) > Number(g.current_amount));
   let archaeologyTxs: typeof activeData.transactions = [];
   let archaeologySum = 0;
   
   if (activeGoal) {
-    const gap = activeGoal.target_amount - activeGoal.current_amount;
+    const gap = Number(activeGoal.target_amount) - Number(activeGoal.current_amount);
     const nonEssentials = filteredTxs
       .filter(t => t.type === 'expense' && !['Rent', 'Utilities', 'Groceries'].includes(t.category))
-      .sort((a, b) => b.amount - a.amount);
+      .sort((a, b) => Number(b.amount) - Number(a.amount));
     
     for (const t of nonEssentials) {
       if (archaeologySum >= gap) break;
       archaeologyTxs.push(t);
-      archaeologySum += t.amount;
+      archaeologySum = new Decimal(archaeologySum).plus(t.amount).toNumber();
     }
   }
 
@@ -158,13 +159,6 @@ export const Insights: React.FC = () => {
           )}
         </div>
 
-        {/* Deja Vu Detector - Honest empty state */}
-        <div className="bg-surface border border-line rounded-3xl p-8 shadow-sm md:col-span-2">
-          <h3 className="text-caption uppercase tracking-widest text-muted font-semibold mb-6">Déjà Vu Detector</h3>
-          <p className="text-muted text-sm italic">
-            Insufficient historical month-over-month data to establish a high-confidence similarity precedent.
-          </p>
-        </div>
 
       </div>
     </div>

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
+import { apiClient } from '../api/client';
 
 export const Goals: React.FC = () => {
-  const { db, updateDB } = useFinanceDB();
+  const { db, updateDB, refreshFromBackend } = useFinanceDB();
   const activeData = getActiveUserData(db);
   const [newGoalName, setNewGoalName] = useState('');
   const [newGoalTarget, setNewGoalTarget] = useState('');
@@ -16,72 +17,89 @@ export const Goals: React.FC = () => {
 
   if (!activeData) return <div className="p-8">Please log in.</div>;
 
-  const handleAddGoal = (e: React.FormEvent) => {
+  const handleAddGoal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGoalName || !newGoalTarget) return;
 
-    const newGoal = {
-      id: 'g_' + Date.now(),
+    const optimistic = {
+      id: 'temp_g_' + Date.now(),
       user_id: activeData.user.id,
       name: newGoalName,
       target_amount: Number(newGoalTarget),
       current_amount: 0,
       target_date: '',
-      priority: 1
+      priority: 1,
     };
-
-    updateDB(prev => ({ ...prev, goals: [...prev.goals, newGoal] }));
+    updateDB(prev => ({ ...prev, goals: [...prev.goals, optimistic] }));
     setNewGoalName('');
     setNewGoalTarget('');
+
+    try {
+      await apiClient.post('/finance/goals', {
+        name: optimistic.name,
+        target_amount: optimistic.target_amount,
+        current_amount: 0,
+        priority: 1,
+      });
+      await refreshFromBackend();
+    } catch (err) {
+      console.error('Failed to save goal:', err);
+      updateDB(prev => ({ ...prev, goals: prev.goals.filter(g => g.id !== optimistic.id) }));
+    }
   };
 
-  const handleDraftContract = (e: React.FormEvent) => {
+  const handleDraftContract = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!contractAmount || !contractMerchant) return;
-
     const numAmount = Number(contractAmount);
 
-    // 1. Add to Recurring Transactions (Future Commitments)
-    const newRecurring = {
-      id: 'rec_' + Date.now(),
+    const tempRecId = 'temp_rec_' + Date.now();
+    const optimisticRec = {
+      id: tempRecId,
       user_id: activeData.user.id,
       merchant: contractMerchant,
       amount: numAmount,
       frequency: 'monthly' as const,
       next_expected_date: contractDate,
-      confidence_score: 1.0
+      confidence_score: 100,
     };
-
-    // 2. Immediately debit the first payment as an expense
-    const initialExpense = {
-      id: 'tx_' + Date.now(),
-      user_id: activeData.user.id,
-      type: 'expense' as const,
-      amount: numAmount,
-      category: 'Commitment Contract',
-      merchant: contractMerchant,
-      description: 'Auto-debited from contract draft',
-      transaction_date: new Date().toISOString().split('T')[0],
-      payment_method: 'Auto-Debit',
-      is_recurring: true,
-      regret_tag: null,
-      created_at: new Date().toISOString()
-    };
-
-    updateDB(prev => ({ 
-      ...prev, 
-      recurring_transactions: [...prev.recurring_transactions, newRecurring],
-      transactions: [initialExpense, ...prev.transactions]
-    }));
-
+    updateDB(prev => ({ ...prev, recurring_transactions: [...prev.recurring_transactions, optimisticRec] }));
     setContractAmount('');
+
+    try {
+      await apiClient.post('/finance/recurring', {
+        merchant: contractMerchant,
+        amount: numAmount,
+        frequency: 'monthly',
+        next_expected_date: contractDate,
+      });
+      // Also log the first expense
+      await apiClient.post('/finance/transactions', {
+        type: 'expense',
+        amount: numAmount,
+        category: 'Commitment Contract',
+        merchant: contractMerchant,
+        description: 'Auto-debited from contract draft',
+        transaction_date: new Date().toISOString().split('T')[0],
+        payment_method: 'Auto-Debit',
+        is_recurring: true,
+      });
+      await refreshFromBackend();
+    } catch (err) {
+      console.error('Failed to save contract:', err);
+      updateDB(prev => ({ ...prev, recurring_transactions: prev.recurring_transactions.filter(r => r.id !== tempRecId) }));
+    }
   };
 
-  const handleTerminateContract = (recId: string) => {
-    if (window.confirm('WARNING: Are you genuinely sure you want to terminate this contract? It will immediately stop future deductions.')) {
-      updateDB(prev => ({
-        ...prev, recurring_transactions: prev.recurring_transactions.filter(r => r.id !== recId)
-      }));
+  const handleTerminateContract = async (recId: string) => {
+    if (window.confirm('Are you sure you want to terminate this contract?')) {
+      updateDB(prev => ({ ...prev, recurring_transactions: prev.recurring_transactions.filter(r => r.id !== recId) }));
+      try {
+        await apiClient.delete(`/finance/recurring/${recId}`);
+      } catch (err) {
+        console.error('Failed to delete recurring transaction:', err);
+        await refreshFromBackend();
+      }
     }
   };
 

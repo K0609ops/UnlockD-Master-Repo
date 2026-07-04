@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { RefreshCw } from 'lucide-react';
+import Decimal from 'decimal.js';
 
 export const AnalyticsCharts: React.FC = () => {
   const { db } = useFinanceDB();
@@ -19,7 +20,7 @@ export const AnalyticsCharts: React.FC = () => {
     const categoryTotals: Record<string, number> = {};
     
     expenses.forEach(t => {
-      categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
+      categoryTotals[t.category] = new Decimal(categoryTotals[t.category] || 0).plus(t.amount).toNumber();
     });
 
     return Object.entries(categoryTotals)
@@ -91,7 +92,7 @@ export const AnalyticsCharts: React.FC = () => {
                   <div className="text-[10px] text-muted">{tx.category}</div>
                 </div>
                 <div className="text-right">
-                  <div className="font-mono font-bold text-ink">₹{tx.amount.toFixed(2)}</div>
+                  <div className="font-mono font-bold text-ink">₹{Number(tx.amount).toFixed(2)}</div>
                   <div className="text-[9px] uppercase tracking-widest text-muted">Per Cycle</div>
                 </div>
               </div>

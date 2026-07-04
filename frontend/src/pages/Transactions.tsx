@@ -1,36 +1,87 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
 import { QuickAddTransaction } from '../components/QuickAddTransaction';
 import { ImportStatement } from '../components/ImportStatement';
+import { apiClient } from '../api/client';
+import type { Transaction } from '../context/FinanceContext';
 
 export const Transactions: React.FC = () => {
-  const { db, updateDB } = useFinanceDB();
+  const { db, updateDB, refreshFromBackend } = useFinanceDB();
   const activeData = getActiveUserData(db);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all');
+  
+  const [localTxs, setLocalTxs] = useState<Transaction[]>([]);
+  const [skip, setSkip] = useState(50);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeData?.transactions) {
+      setLocalTxs(activeData.transactions);
+      setSkip(activeData.transactions.length);
+      setHasMore(activeData.transactions.length >= 50);
+    }
+  }, [activeData?.transactions]);
 
   if (!activeData) return <div className="p-8">Please log in.</div>;
 
-  const handleToggleRegret = (txId: string, current: 'good' | 'bad' | null) => {
-    const nextVal = current === null ? 'bad' : current === 'bad' ? 'good' : null;
-    updateDB(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t => t.id === txId ? { ...t, regret_tag: nextVal } : t)
-    }));
+  const handleLoadMore = async () => {
+    setIsLoading(true);
+    try {
+      const res = await apiClient.get<Transaction[]>(`/finance/transactions?skip=${skip}&limit=50`);
+      if (res.length > 0) {
+        setLocalTxs(prev => [...prev, ...res]);
+        setSkip(prev => prev + res.length);
+        if (res.length < 50) setHasMore(false);
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error('Failed to load more transactions', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleDelete = (txId: string) => {
+  const handleToggleRegret = async (txId: string, current: 'good' | 'bad' | null) => {
+    const nextVal = current === null ? 'bad' : current === 'bad' ? 'good' : null;
+    // Optimistic update
     updateDB(prev => ({
       ...prev,
-      transactions: prev.transactions.filter(t => t.id !== txId)
+      transactions: prev.transactions.map(t => t.id === txId ? { ...t, regret_tag: nextVal } : t),
     }));
+    try {
+      await apiClient.patch(`/finance/transactions/${txId}`, { regret_tag: nextVal });
+    } catch (err) {
+      console.error('Failed to update regret tag:', err);
+      // Rollback
+      updateDB(prev => ({
+        ...prev,
+        transactions: prev.transactions.map(t => t.id === txId ? { ...t, regret_tag: current } : t),
+      }));
+    }
+  };
+
+  const handleDelete = async (txId: string) => {
+    const tx = activeData?.transactions.find(t => t.id === txId);
+    updateDB(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== txId) }));
+    try {
+      await apiClient.delete(`/finance/transactions/${txId}`);
+    } catch (err) {
+      console.error('Failed to delete transaction:', err);
+      if (tx) {
+        updateDB(prev => ({ ...prev, transactions: [tx, ...prev.transactions] }));
+      }
+      await refreshFromBackend();
+    }
   };
 
   const filteredTxs = useMemo(() => {
-    return activeData.transactions
+    return localTxs
       .filter(t => filterType === 'all' || t.type === filterType)
       .filter(t => t.merchant.toLowerCase().includes(searchTerm.toLowerCase()) || t.category.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [activeData.transactions, searchTerm, filterType]);
+  }, [localTxs, searchTerm, filterType]);
 
   return (
     <div className="min-h-screen p-6 py-12 max-w-5xl mx-auto animate-fade-in-up">
@@ -111,6 +162,17 @@ export const Transactions: React.FC = () => {
               </table>
             )}
           </div>
+          {hasMore && (
+            <div className="flex justify-center">
+              <button 
+                onClick={handleLoadMore}
+                disabled={isLoading}
+                className="px-6 py-2 bg-paper border border-line rounded-xl text-sm font-medium hover:bg-surface disabled:opacity-50 transition-colors"
+              >
+                {isLoading ? 'Loading...' : 'Load Older Transactions'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

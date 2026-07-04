@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useFinanceDB } from '../context/FinanceContext';
+import { loginWithEmail, registerWithEmail, syncGoogleUserWithBackend } from '../api/auth';
 
 export const Login: React.FC = () => {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
@@ -9,23 +10,24 @@ export const Login: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser, loginWithGoogle, firebaseEnabled } = useAuth();
-  const { db, updateDB } = useFinanceDB();
+  const { db, updateDB, refreshFromBackend } = useFinanceDB();
 
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/setup';
 
-  // If already authenticated, redirect
+  // Redirect if already authenticated
   useEffect(() => {
     if (currentUser || db.currentUserEmail) {
       navigate(from, { replace: true });
     }
   }, [currentUser, db.currentUserEmail, navigate, from]);
 
-  // Auto-fill username from email prefix during signup
+  // Auto-fill username from email
   useEffect(() => {
     if (mode === 'signup' && email && !username) {
       setUsername(email.split('@')[0]);
@@ -35,6 +37,9 @@ export const Login: React.FC = () => {
   const validatePassword = (pass: string) =>
     pass.length >= 8 && /[A-Z]/.test(pass) && /[0-9]/.test(pass);
 
+  // ---------------------------------------------------------------------------
+  // Google Auth
+  // ---------------------------------------------------------------------------
   const handleGoogleAuth = async () => {
     setError('');
     setGoogleLoading(true);
@@ -45,33 +50,28 @@ export const Login: React.FC = () => {
     }
     try {
       const firebaseUser = await loginWithGoogle();
+      const res = await syncGoogleUserWithBackend();
       const userEmail = firebaseUser.email!;
       const displayName = firebaseUser.displayName || userEmail.split('@')[0];
 
-      // Upsert user in local finance state
-      const existingUser = db.users.find(u => u.email === userEmail);
-      if (!existingUser) {
-        const newUser = {
-          id: firebaseUser.uid,
-          email: userEmail,
-          username: displayName,
-          monthly_income: 0,
-          hours_per_week: 40,
-          created_at: new Date().toISOString(),
-        };
-        updateDB(prev => ({
-          ...prev,
-          users: [...prev.users, newUser],
-          currentUserEmail: userEmail,
-        }));
-        navigate('/setup', { replace: true });
-      } else {
-        updateDB(prev => ({ ...prev, currentUserEmail: userEmail }));
-        navigate('/dashboard', { replace: true });
-      }
+      updateDB(prev => ({
+        ...prev,
+        currentUserEmail: userEmail,
+        users: prev.users.find(u => u.email === userEmail)
+          ? prev.users
+          : [...prev.users, {
+              id: firebaseUser.uid,
+              email: userEmail,
+              username: displayName,
+              monthly_income: res?.user?.monthly_income ?? 0,
+              hours_per_week: res?.user?.hours_per_week ?? 40,
+              created_at: new Date().toISOString(),
+            }],
+      }));
+
+      navigate(res?.is_new_user ? '/setup' : '/dashboard', { replace: true });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Google sign-in failed.';
-      // User cancelled popup — don't show error
+      const msg = err instanceof Error ? err.message : '';
       if (!msg.includes('popup-closed')) {
         setError('Google sign-in failed. Please try again.');
       }
@@ -80,29 +80,42 @@ export const Login: React.FC = () => {
     }
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  // ---------------------------------------------------------------------------
+  // Email/Password Login — calls real backend
+  // ---------------------------------------------------------------------------
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
-    // Check if it's the backend-seeded demo user
-    if ((email === 'demo@finverse.app' || email === 'Kalhara Biju') && password === 'Demo@2024') {
-      updateDB(prev => ({ ...prev, currentUserEmail: 'demo@finverse.app' }));
+    setLoading(true);
+    try {
+      const res = await loginWithEmail(email, password);
+      updateDB(prev => ({
+        ...prev,
+        currentUserEmail: res.user.email,
+        users: prev.users.find(u => u.email === res.user.email)
+          ? prev.users
+          : [...prev.users, {
+              id: res.user.id,
+              email: res.user.email,
+              username: res.user.username || res.user.email.split('@')[0],
+              monthly_income: res.user.monthly_income,
+              hours_per_week: res.user.hours_per_week,
+              target_savings_percentage: res.user.target_savings_percentage,
+              created_at: res.user.created_at,
+            }],
+      }));
       navigate('/dashboard', { replace: true });
-      return;
-    }
-
-    const user = db.users.find(
-      u => (u.email === email || u.username === email) && u.password === password
-    );
-    if (user) {
-      updateDB(prev => ({ ...prev, currentUserEmail: user.email }));
-      navigate('/dashboard', { replace: true });
-    } else {
-      setError('Invalid credentials. Have you signed up?');
+    } catch (err: unknown) {
+      setError('Invalid email or password.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleSignup = (e: React.FormEvent) => {
+  // ---------------------------------------------------------------------------
+  // Email/Password Register — calls real backend
+  // ---------------------------------------------------------------------------
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -110,34 +123,37 @@ export const Login: React.FC = () => {
       setError('All fields are required.');
       return;
     }
-    if (db.users.find(u => u.email === email)) {
-      setError('Email already registered. Please log in.');
-      return;
-    }
-    if (db.users.find(u => u.username === username)) {
-      setError('Username taken. Please choose another.');
-      return;
-    }
     if (!validatePassword(password)) {
       setError('Password must be 8+ chars with an uppercase letter and a number.');
       return;
     }
 
-    const newUser = {
-      id: 'u_' + Date.now(),
-      email,
-      username,
-      password,
-      monthly_income: 0,
-      hours_per_week: 40,
-      created_at: new Date().toISOString(),
-    };
-    updateDB(prev => ({
-      ...prev,
-      users: [...prev.users, newUser],
-      currentUserEmail: email,
-    }));
-    navigate('/setup', { replace: true });
+    setLoading(true);
+    try {
+      const res = await registerWithEmail(email, username, password);
+      updateDB(prev => ({
+        ...prev,
+        currentUserEmail: res.user.email,
+        users: [...prev.users, {
+          id: res.user.id,
+          email: res.user.email,
+          username: res.user.username || username,
+          monthly_income: 0,
+          hours_per_week: 40,
+          created_at: res.user.created_at,
+        }],
+      }));
+      navigate('/setup', { replace: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('409') || msg.toLowerCase().includes('already')) {
+        setError('Email already registered. Please log in.');
+      } else {
+        setError('Registration failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -155,6 +171,7 @@ export const Login: React.FC = () => {
           </div>
         )}
 
+        {/* Google button — shown for both login and signup */}
         <button
           type="button"
           onClick={handleGoogleAuth}
@@ -164,7 +181,7 @@ export const Login: React.FC = () => {
           {googleLoading ? (
             <div className="w-4 h-4 rounded-full border-2 border-line border-t-ink animate-spin" />
           ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
               <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
               <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
@@ -172,6 +189,15 @@ export const Login: React.FC = () => {
             </svg>
           )}
           {googleLoading ? 'Connecting...' : 'Continue with Google'}
+        </button>
+
+        {/* Demo quick-login button */}
+        <button
+          type="button"
+          onClick={() => { setEmail('demo@finverse.app'); setPassword('Demo@2024'); setMode('login'); }}
+          className="w-full text-xs text-muted border border-dashed border-line rounded-xl py-2 hover:border-ink hover:text-ink transition-colors mb-6"
+        >
+          Use Demo Account
         </button>
 
         <div className="flex items-center gap-4 text-muted text-xs uppercase tracking-widest mb-6">
@@ -184,9 +210,9 @@ export const Login: React.FC = () => {
         {mode === 'login' && (
           <form onSubmit={handleLogin} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <label className="text-caption font-semibold uppercase tracking-wider text-muted">Email or Username</label>
+              <label className="text-caption font-semibold uppercase tracking-wider text-muted">Email</label>
               <input
-                type="text" value={email} onChange={e => setEmail(e.target.value)} required
+                type="email" value={email} onChange={e => setEmail(e.target.value)} required
                 className="bg-paper border border-line rounded-xl px-4 py-3 focus:outline-none focus:border-ink transition-colors font-mono"
               />
             </div>
@@ -199,8 +225,12 @@ export const Login: React.FC = () => {
               />
             </div>
 
-            <button type="submit" className="w-full bg-ink text-paper py-4 rounded-xl font-medium mt-4 hover:shadow-xl transition-all">
-              Authenticate
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-ink text-paper py-4 rounded-xl font-medium mt-4 hover:shadow-xl transition-all disabled:opacity-60"
+            >
+              {loading ? 'Authenticating...' : 'Authenticate'}
             </button>
             <button type="button" onClick={() => { setMode('signup'); setError(''); }} className="text-sm text-muted hover:text-ink mt-2 transition-colors">
               New here? Create an account.
@@ -236,8 +266,12 @@ export const Login: React.FC = () => {
               />
             </div>
 
-            <button type="submit" className="w-full bg-ink text-paper py-4 rounded-xl font-medium mt-4 hover:shadow-xl transition-all">
-              Create Account
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-ink text-paper py-4 rounded-xl font-medium mt-4 hover:shadow-xl transition-all disabled:opacity-60"
+            >
+              {loading ? 'Creating...' : 'Create Account'}
             </button>
             <button type="button" onClick={() => { setMode('login'); setError(''); }} className="text-sm text-muted hover:text-ink mt-2 transition-colors">
               Already have an account? Log in.

@@ -23,8 +23,7 @@ export async function runNegotiation(
   baselineRisk: string,
   scenarioRisk: string
 ): Promise<NegotiationResult> {
-  // If no API key, return a deterministic local fallback so the app always works
-  if (!GEMINI_API_KEY) {
+  const getFallback = (): NegotiationResult => {
     const shouldProceed = scenarioRisk !== 'storm';
     return {
       present_argument: `I want to buy ${merchant} for ₹${amount}. My safe-to-spend is ₹${baselineSafe} right now — this feels manageable.`,
@@ -32,6 +31,11 @@ export async function runNegotiation(
       resolution: shouldProceed ? 'You are clear to proceed.' : 'Skip it — risk threshold breached.',
       outcome: shouldProceed ? 'proceed' : 'skip',
     };
+  };
+
+  // If no API key, return a deterministic local fallback so the app always works
+  if (!GEMINI_API_KEY || GEMINI_API_KEY.trim() === '' || GEMINI_API_KEY === 'your_api_key_here') {
+    return getFallback();
   }
 
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -64,18 +68,18 @@ export async function runNegotiation(
     }
   `;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: prompt
-  });
-
-  let responseText = response.text || '';
-  responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
-
   try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt
+    });
+
+    let responseText = response.text || '';
+    responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+
     return JSON.parse(responseText) as NegotiationResult;
-  } catch {
-    console.error('Gemini parse error', responseText);
-    throw new Error('Failed to parse Gemini response.');
+  } catch (error) {
+    console.error('Gemini API call failed (invalid key or network error), falling back to local heuristic', error);
+    return getFallback();
   }
 }

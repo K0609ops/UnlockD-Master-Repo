@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
 import { AtomicTransferForm } from './AtomicTransferForm';
+import { apiClient } from '../api/client';
+import Decimal from 'decimal.js';
 
 interface QuickAddProps {
   onAdd?: () => void; // Optional callback after adding
@@ -12,7 +14,7 @@ const CATEGORIES = [
 ];
 
 export const QuickAddTransaction: React.FC<QuickAddProps> = ({ onAdd, hideTransfer = false }) => {
-  const { db, updateDB } = useFinanceDB();
+  const { db, updateDB, refreshFromBackend } = useFinanceDB();
   const activeData = getActiveUserData(db);
   
   const [activeTab, setActiveTab] = useState<'log' | 'transfer'>('log');
@@ -25,19 +27,16 @@ export const QuickAddTransaction: React.FC<QuickAddProps> = ({ onAdd, hideTransf
   const [selectedGoalId, setSelectedGoalId] = useState('');
   const [incomeType, setIncomeType] = useState('Salary');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amount || !activeData) return;
-    
-    // Validation
     if (type === 'expense' && !merchant) return;
     if (type === 'goal' && !selectedGoalId) {
-      alert("Please select a goal.");
+      alert('Please select a goal.');
       return;
     }
 
-    const numAmount = Number(amount);
-    
+    const numAmount = new Decimal(amount);
     let finalMerchant = merchant;
     let finalCategory = category;
 
@@ -50,48 +49,75 @@ export const QuickAddTransaction: React.FC<QuickAddProps> = ({ onAdd, hideTransf
       finalCategory = 'Income';
     }
 
-    const newTx = {
-      id: 'tx_' + Date.now(),
+    // Optimistic local update while API call is in flight
+    const tempId = 'temp_' + Date.now();
+    const optimisticTx = {
+      id: tempId,
       user_id: activeData.user.id,
       type,
-      amount: numAmount,
+      amount: numAmount.toNumber(),
       category: finalCategory,
       merchant: finalMerchant,
       description: '',
       transaction_date: date,
       payment_method: 'Card',
       is_recurring: false,
-      regret_tag: null,
+      regret_tag: null as null,
       created_at: new Date().toISOString(),
-      ...(type === 'goal' && selectedGoalId ? { goal_id: selectedGoalId } : {})
+      ...(type === 'goal' && selectedGoalId ? { goal_id: selectedGoalId } : {}),
     };
 
-    updateDB(prev => {
-      let nextPrev = {
-        ...prev,
-        transactions: [newTx, ...prev.transactions]
-      };
-
-      if (type === 'goal' && selectedGoalId) {
-        nextPrev.goals = nextPrev.goals.map(g => 
-          g.id === selectedGoalId ? { ...g, current_amount: g.current_amount + numAmount } : g
-        );
-      }
-      
-      const primaryIdx = nextPrev.accounts.findIndex(a => a.accountType === 'primary');
-      if (primaryIdx !== -1) {
-        const netChange = type === 'income' ? numAmount : -numAmount;
-        nextPrev.accounts = nextPrev.accounts.map((acc, idx) => 
-          idx === primaryIdx ? { ...acc, balance: acc.balance + netChange } : acc
-        );
-      }
-
-      return nextPrev;
-    });
+    updateDB(prev => ({
+      ...prev,
+      transactions: [optimisticTx, ...prev.transactions],
+      ...(type === 'goal' && selectedGoalId ? {
+        goals: prev.goals.map(g =>
+          g.id === selectedGoalId ? { ...g, current_amount: new Decimal(g.current_amount).plus(numAmount).toNumber() } : g
+        ),
+      } : {}),
+      accounts: prev.accounts.map(acc =>
+        acc.accountType === 'primary'
+          ? { ...acc, balance: new Decimal(acc.balance).plus(type === 'income' ? numAmount : numAmount.neg()).toNumber() }
+          : acc
+      ),
+    }));
 
     setAmount('');
     setMerchant('');
     if (onAdd) onAdd();
+
+    try {
+      await apiClient.post('/finance/transactions', {
+        type,
+        amount: numAmount.toNumber(),
+        category: finalCategory,
+        merchant: finalMerchant,
+        description: '',
+        transaction_date: date,
+        payment_method: 'Card',
+        is_recurring: false,
+        goal_id: type === 'goal' ? selectedGoalId : undefined,
+      });
+      // Refresh to replace the temp ID with the server-generated UUID
+      await refreshFromBackend();
+    } catch (err) {
+      console.error('Failed to save transaction:', err);
+      // Roll back optimistic update
+      updateDB(prev => ({
+        ...prev,
+        transactions: prev.transactions.filter(t => t.id !== tempId),
+        ...(type === 'goal' && selectedGoalId ? {
+          goals: prev.goals.map(g =>
+            g.id === selectedGoalId ? { ...g, current_amount: new Decimal(g.current_amount).minus(numAmount).toNumber() } : g
+          ),
+        } : {}),
+        accounts: prev.accounts.map(acc =>
+          acc.accountType === 'primary'
+            ? { ...acc, balance: new Decimal(acc.balance).minus(type === 'income' ? numAmount : numAmount.neg()).toNumber() }
+            : acc
+        ),
+      }));
+    }
   };
 
   return (

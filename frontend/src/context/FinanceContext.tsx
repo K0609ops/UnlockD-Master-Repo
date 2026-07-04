@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { apiClient } from '../api/client';
 
 // --- Database Schema Equivalents ---
 
@@ -14,7 +15,7 @@ export interface User {
   id: string;
   email: string;
   username: string;
-  password?: string; // Only for local email/password accounts (not Google)
+  password?: string;
   monthly_income: number;
   hours_per_week: number;
   target_savings_percentage?: number;
@@ -29,14 +30,12 @@ export interface Transaction {
   category: string;
   merchant: string;
   description: string;
-  transaction_date: string; // YYYY-MM-DD
+  transaction_date: string;
   payment_method: string;
   is_recurring: boolean;
   regret_tag: 'good' | 'bad' | null;
   created_at: string;
   goal_id?: string;
-
-  // Atomic Transfer Fields
   fromAccountId?: string | null;
   toAccountId?: string | null;
   status?: 'pending' | 'completed' | 'failed' | 'reversed';
@@ -143,15 +142,11 @@ export interface DBState {
   contracts: Contract[];
   sacrifices: Sacrifice[];
   insights: Insight[];
-
-  // Groups and Bill Splitting
   groups: Group[];
   group_members: GroupMember[];
   group_expenses: GroupExpense[];
   expense_splits: ExpenseSplit[];
   settlements: Settlement[];
-
-  // Session state
   currentUserEmail: string | null;
 }
 
@@ -159,17 +154,8 @@ interface FinanceContextType {
   db: DBState;
   updateDB: (updater: (prev: DBState) => DBState) => void;
   clearDB: () => void;
-  executeSimulatedTransfer: (
-    fromAccountId: string,
-    toAccountId: string,
-    amount: number,
-    idempotencyKey: string,
-    category: string,
-    description: string
-  ) => { success: boolean; error?: string; transaction?: Transaction };
+  refreshFromBackend: () => Promise<void>;
 }
-
-import { apiClient } from '../api/client';
 
 const defaultDB: DBState = {
   currentUserEmail: null,
@@ -215,22 +201,34 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return defaultDB;
   });
 
-  // Fetch real data from Postgres API whenever currentUserEmail changes
+  // Track whether we've already hydrated from backend for the current email.
+  // This prevents the re-hydration on every render from wiping optimistic updates.
+  const hydratedEmailRef = useRef<string | null>(null);
+
+  const refreshFromBackend = async () => {
+    try {
+      const state = await apiClient.get<DBState>('/finance/state');
+      setDb(prev => ({
+        ...state,
+        currentUserEmail: prev.currentUserEmail,
+      }));
+      if (db.currentUserEmail) {
+        hydratedEmailRef.current = db.currentUserEmail;
+      }
+    } catch (err) {
+      console.error('Failed to fetch state from backend:', err);
+    }
+  };
+
+  // Hydrate from backend ONCE per login session (not on every re-render)
   useEffect(() => {
-    if (db.currentUserEmail) {
-      apiClient.get<DBState>(`/finance/${encodeURIComponent(db.currentUserEmail)}/state`)
-        .then((state) => {
-          setDb(prev => ({
-            ...state,
-            currentUserEmail: prev.currentUserEmail
-          }));
-        })
-        .catch(err => {
-          console.error('Failed to fetch user state from backend API:', err);
-        });
+    if (db.currentUserEmail && hydratedEmailRef.current !== db.currentUserEmail) {
+      hydratedEmailRef.current = db.currentUserEmail;
+      refreshFromBackend();
     }
   }, [db.currentUserEmail]);
 
+  // Persist to localStorage (excludes sensitive keys)
   useEffect(() => {
     localStorage.setItem('finverse_db', JSON.stringify(db));
   }, [db]);
@@ -243,83 +241,8 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setDb(defaultDB);
   };
 
-  const executeSimulatedTransfer = (
-    fromAccountId: string,
-    toAccountId: string,
-    amount: number,
-    idempotencyKey: string,
-    category: string,
-    description: string
-  ): { success: boolean; error?: string; transaction?: Transaction } => {
-
-    // 1. Deduplication Guard
-    const existingTx = db.transactions.find(tx => tx.idempotencyKey === idempotencyKey);
-    if (existingTx) {
-      return { success: existingTx.status === 'completed', transaction: existingTx };
-    }
-
-    // 2. Fetch Accounts
-    const fromAccount = db.accounts.find(acc => acc.id === fromAccountId);
-    const toAccount = db.accounts.find(acc => acc.id === toAccountId);
-
-    if (!fromAccount || !toAccount) {
-      return { success: false, error: 'INVALID_ACCOUNT' };
-    }
-
-    // 3. Overdraft Prevention
-    if (fromAccount.balance < amount) {
-      const failedTx: Transaction = {
-        id: 'tx_' + Date.now(),
-        user_id: fromAccount.userId,
-        type: 'transfer',
-        amount, category,
-        merchant: 'System',
-        description,
-        transaction_date: new Date().toISOString().split('T')[0],
-        payment_method: 'Internal Transfer',
-        is_recurring: false,
-        regret_tag: null,
-        created_at: new Date().toISOString(),
-        fromAccountId, toAccountId,
-        status: 'failed',
-        idempotencyKey,
-      };
-      updateDB(prev => ({ ...prev, transactions: [failedTx, ...prev.transactions] }));
-      return { success: false, error: 'INSUFFICIENT_FUNDS', transaction: failedTx };
-    }
-
-    // 4. Atomic State Transition
-    const completedTx: Transaction = {
-      id: 'tx_' + Date.now(),
-      user_id: fromAccount.userId,
-      type: 'transfer',
-      amount, category,
-      merchant: 'System',
-      description,
-      transaction_date: new Date().toISOString().split('T')[0],
-      payment_method: 'Internal Transfer',
-      is_recurring: false,
-      regret_tag: null,
-      created_at: new Date().toISOString(),
-      fromAccountId, toAccountId,
-      status: 'completed',
-      idempotencyKey,
-    };
-
-    updateDB(prev => {
-      const updatedAccounts = prev.accounts.map(acc => {
-        if (acc.id === fromAccountId) return { ...acc, balance: acc.balance - amount };
-        if (acc.id === toAccountId) return { ...acc, balance: acc.balance + amount };
-        return acc;
-      });
-      return { ...prev, accounts: updatedAccounts, transactions: [completedTx, ...prev.transactions] };
-    });
-
-    return { success: true, transaction: completedTx };
-  };
-
   return (
-    <FinanceContext.Provider value={{ db, updateDB, clearDB, executeSimulatedTransfer }}>
+    <FinanceContext.Provider value={{ db, updateDB, clearDB, refreshFromBackend }}>
       {children}
     </FinanceContext.Provider>
   );

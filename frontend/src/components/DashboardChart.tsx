@@ -1,5 +1,6 @@
 import React from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import Decimal from 'decimal.js';
 import type { ForecastPoint } from '../engine/financeEngine';
 import type { Transaction } from '../context/FinanceContext';
 
@@ -38,8 +39,8 @@ export const DashboardChart: React.FC<DashboardChartProps> = ({ forecast, transa
     if (i <= 0) {
       // Historical data from transactions
       const dayTxs = transactions.filter(t => t.transaction_date === dateStr);
-      const income = dayTxs.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
-      const expense = dayTxs.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+      const income = dayTxs.filter(t => t.type === 'income').reduce((sum, t) => new Decimal(sum).plus(t.amount).toNumber(), 0);
+      const expense = dayTxs.filter(t => t.type === 'expense').reduce((sum, t) => new Decimal(sum).plus(t.amount).toNumber(), 0);
       data.push({
         date: dateStr,
         displayDate: `${d.getMonth() + 1}/${d.getDate()}`,
@@ -54,7 +55,7 @@ export const DashboardChart: React.FC<DashboardChartProps> = ({ forecast, transa
         date: dateStr,
         displayDate: `${d.getMonth() + 1}/${d.getDate()}`,
         income: 0,
-        expense: fPoint ? fPoint.contributingFactors.filter(c => c.type === 'expense').reduce((s, c) => s + c.amount, 0) : 0,
+        expense: fPoint ? fPoint.contributingFactors.filter(c => c.type === 'expense').reduce((s, c) => new Decimal(s).plus(c.amount).toNumber(), 0) : 0,
         balance: fPoint ? fPoint.predictedBalance : 0
       });
     }

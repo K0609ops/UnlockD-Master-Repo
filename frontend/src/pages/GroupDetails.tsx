@@ -40,14 +40,14 @@ export const GroupDetails: React.FC = () => {
   members.forEach(m => balances[m.id] = 0);
   
   expenses.forEach(e => {
-    if (balances[e.paid_by] !== undefined) balances[e.paid_by] += e.amount;
+    if (balances[e.paid_by] !== undefined) balances[e.paid_by] += Number(e.amount);
   });
   splits.forEach(s => {
-    if (balances[s.member_id] !== undefined) balances[s.member_id] -= s.amount_owed;
+    if (balances[s.member_id] !== undefined) balances[s.member_id] -= Number(s.amount_owed);
   });
   completedSettlements.forEach(s => {
-    if (balances[s.paid_by] !== undefined) balances[s.paid_by] += s.amount;
-    if (balances[s.paid_to] !== undefined) balances[s.paid_to] -= s.amount;
+    if (balances[s.paid_by] !== undefined) balances[s.paid_by] += Number(s.amount);
+    if (balances[s.paid_to] !== undefined) balances[s.paid_to] -= Number(s.amount);
   });
 
   const getMemberName = (id: string) => members.find(m => m.id === id)?.name || 'Unknown';
@@ -104,7 +104,7 @@ export const GroupDetails: React.FC = () => {
 
       // Refetch state from server to get updated settlements
       if (db.currentUserEmail) {
-        const state = await apiClient.get<any>(`/finance/${encodeURIComponent(db.currentUserEmail)}/state`);
+        const state = await apiClient.get<any>('/finance/state');
         updateDB(prev => ({ ...state, currentUserEmail: prev.currentUserEmail }));
       }
 
@@ -125,7 +125,7 @@ export const GroupDetails: React.FC = () => {
       await apiClient.post(`/groups/${groupId}/settlements/${settlementId}/pay`, {});
       // Refetch state
       if (db.currentUserEmail) {
-        const state = await apiClient.get<any>(`/finance/${encodeURIComponent(db.currentUserEmail)}/state`);
+        const state = await apiClient.get<any>('/finance/state');
         updateDB(prev => ({ ...state, currentUserEmail: prev.currentUserEmail }));
       }
     } catch (err) {
@@ -186,7 +186,7 @@ export const GroupDetails: React.FC = () => {
                     <div>
                       <span className="font-medium">{getMemberName(s.paid_by)}</span> owes <span className="font-medium">{getMemberName(s.paid_to)}</span>
                     </div>
-                    <span className="font-mono font-bold">₹{s.amount.toFixed(2)}</span>
+                    <span className="font-mono font-bold">₹{Number(s.amount).toFixed(2)}</span>
                   </div>
                 ))}
                 {pendingSettlements.length > 3 && (
@@ -227,7 +227,7 @@ export const GroupDetails: React.FC = () => {
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="font-mono font-bold text-ink">₹{exp.amount.toFixed(2)}</p>
+                      <p className="font-mono font-bold text-ink">₹{Number(exp.amount).toFixed(2)}</p>
                     </div>
                   </div>
                 ))
@@ -299,7 +299,7 @@ export const GroupDetails: React.FC = () => {
                     <p className="text-sm text-ink mb-1">
                       <span className="font-semibold">{getMemberName(s.paid_by)}</span> pays <span className="font-semibold">{getMemberName(s.paid_to)}</span>
                     </p>
-                    <p className="font-mono font-bold text-lg text-ink">₹{s.amount.toFixed(2)}</p>
+                    <p className="font-mono font-bold text-lg text-ink">₹{Number(s.amount).toFixed(2)}</p>
                   </div>
                   <button onClick={() => handlePaySettlement(s.id)} className="shrink-0 flex flex-col items-center gap-1 p-2 bg-success-soft text-success rounded-lg hover:bg-success hover:text-paper transition-colors group">
                     <CheckCircle className="w-5 h-5" />
@@ -317,7 +317,7 @@ export const GroupDetails: React.FC = () => {
                     {completedSettlements.slice(0, 5).map(s => (
                       <div key={s.id} className="text-xs text-muted flex justify-between p-2 bg-surface/50 rounded-lg">
                         <span>{getMemberName(s.paid_by)} paid {getMemberName(s.paid_to)}</span>
-                        <span className="font-mono">₹{s.amount.toFixed(2)}</span>
+                        <span className="font-mono">₹{Number(s.amount).toFixed(2)}</span>
                       </div>
                     ))}
                   </div>

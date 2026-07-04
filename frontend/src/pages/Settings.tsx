@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useFinanceDB, getActiveUserData } from '../context/FinanceContext';
-
+import { clearAuthToken } from '../api/auth';
+import { apiClient } from '../api/client';
 
 export const Settings: React.FC = () => {
   const navigate = useNavigate();
@@ -14,71 +15,100 @@ export const Settings: React.FC = () => {
 
   if (!activeData) return <div className="p-8">Please log in.</div>;
 
-  const handleSave = () => {
-    updateDB(prev => ({
-      ...prev,
-      users: prev.users.map(u => u.id === activeData.user.id ? { ...u, monthly_income: income } : u),
-    }));
-    alert('Settings saved. Forecasts recalculated.');
+  const handleSave = async () => {
+    try {
+      await apiClient.patch('/finance/preferences', {
+        monthly_income: income,
+      });
+      updateDB(prev => ({
+        ...prev,
+        users: prev.users.map(u => u.id === activeData.user.id ? { ...u, monthly_income: income } : u),
+      }));
+      alert('Settings saved. Forecasts recalculated.');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to save settings.');
+    }
   };
 
-  const handleAddAccount = () => {
+  const handleAddAccount = async () => {
     if (!newAccBalance) return;
     const balanceNum = Number(newAccBalance);
     
-    // Check if account type already exists
-    const existingAccount = activeData.accounts.find(a => a.accountType === newAccType);
-    
-    if (existingAccount) {
+    try {
+      await apiClient.post('/finance/accounts', {
+        accountType: newAccType,
+        balance: balanceNum,
+      });
+
+      // Optimistic Update
+      const existingAccount = activeData.accounts.find(a => a.accountType === newAccType);
+      if (existingAccount) {
+        updateDB(prev => ({
+          ...prev,
+          accounts: prev.accounts.map(a => a.id === existingAccount.id ? { ...a, balance: balanceNum } : a)
+        }));
+        setNewAccBalance('');
+        alert('Account balance updated successfully!');
+        return;
+      }
+
+      const newAccount = {
+        id: 'acc_' + Date.now().toString(),
+        userId: activeData.user.id,
+        accountType: newAccType as 'primary' | 'savings' | 'investment',
+        balance: balanceNum,
+        createdAt: new Date().toISOString(),
+      };
+
+      const depositTx = {
+        id: 'tx_' + Date.now().toString(),
+        user_id: activeData.user.id,
+        type: 'income' as const,
+        amount: balanceNum,
+        category: 'Initial Deposit',
+        merchant: 'Manual Addition',
+        description: `Initial balance for new ${newAccType} account`,
+        transaction_date: new Date().toISOString().split('T')[0],
+        payment_method: 'Transfer',
+        is_recurring: false,
+        regret_tag: null,
+        created_at: new Date().toISOString(),
+        toAccountId: newAccount.id,
+        status: 'completed' as const,
+        idempotencyKey: 'idk_' + Date.now().toString(),
+      };
+
       updateDB(prev => ({
         ...prev,
-        accounts: prev.accounts.map(a => a.id === existingAccount.id ? { ...a, balance: balanceNum } : a)
+        accounts: [...prev.accounts, newAccount],
+        transactions: [depositTx, ...prev.transactions],
       }));
       setNewAccBalance('');
-      alert('Account balance updated successfully!');
-      return;
+      alert('Account created successfully!');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to update account.');
     }
-
-    const newAccount = {
-      id: crypto.randomUUID(),
-      userId: activeData.user.id,
-      accountType: newAccType as 'primary' | 'savings' | 'investment',
-      balance: balanceNum,
-      createdAt: new Date().toISOString(),
-    };
-
-    const depositTx = {
-      id: 'tx_' + crypto.randomUUID(),
-      user_id: activeData.user.id,
-      type: 'income' as const,
-      amount: balanceNum,
-      category: 'Initial Deposit',
-      merchant: 'Manual Addition',
-      description: `Initial balance for new ${newAccType} account`,
-      transaction_date: new Date().toISOString().split('T')[0],
-      payment_method: 'Transfer',
-      is_recurring: false,
-      regret_tag: null,
-      created_at: new Date().toISOString(),
-      toAccountId: newAccount.id,
-      status: 'completed' as const,
-      idempotencyKey: crypto.randomUUID(),
-    };
-
-    updateDB(prev => ({
-      ...prev,
-      accounts: [...prev.accounts, newAccount],
-      transactions: [depositTx, ...prev.transactions],
-    }));
-    setNewAccBalance('');
-    alert('Account created successfully!');
   };
 
   const handleClear = () => {
-    if (confirm('Are you sure you want to delete all local data? This is unrecoverable.')) {
+    if (confirm('Are you sure? This clears all local data and logs you out.')) {
+      clearAuthToken();
       clearDB();
       navigate('/');
     }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await apiClient.post('/auth/logout', {});
+    } catch (e) {
+      console.error('Logout error', e);
+    }
+    clearAuthToken();
+    clearDB();
+    navigate('/login');
   };
 
   const handleExport = () => {
@@ -153,6 +183,7 @@ export const Settings: React.FC = () => {
         <section className="bg-surface border border-line rounded-3xl p-8 shadow-sm">
           <h2 className="text-xl font-serif mb-6 text-danger">Data Control</h2>
           <div className="flex flex-col gap-4">
+            <button onClick={handleLogout} className="border border-line py-3 rounded-xl text-ink font-medium hover:bg-paper transition-colors">Sign Out</button>
             <button onClick={handleExport} className="border border-line py-3 rounded-xl text-ink font-medium hover:bg-paper transition-colors">Export Ledger to CSV</button>
             <button onClick={handleClear} className="bg-danger-soft text-danger py-3 rounded-xl font-medium hover:bg-danger hover:text-paper transition-colors">Wipe Local Database</button>
           </div>
