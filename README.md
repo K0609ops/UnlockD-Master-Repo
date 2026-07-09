@@ -222,7 +222,7 @@ docker-compose exec api alembic upgrade head
 
 ---
 
-### Option B: Bare-Metal Local Development Framework Run
+### Option B: Local Development Framework Run
 
 If managing processes manually outside container boundaries:
 
